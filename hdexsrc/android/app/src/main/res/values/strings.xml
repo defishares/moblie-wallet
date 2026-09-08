@@ -1,0 +1,3 @@
+<resources>
+    <!-- app_name 由 productFlavors 的 resValue 定义，详见 build.gradle -->
+</resources>

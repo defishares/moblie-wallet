@@ -1,0 +1,2042 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>K线图</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            background-color: #0B0E11;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+            touch-action: none;
+        }
+        #container {
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+        #timeSelector {
+            display: flex;
+            background-color: transparent;
+            padding: 8px 0px;
+            gap: 12px;
+            font-size: 13px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            white-space: nowrap;
+            -webkit-overflow-scrolling: touch;
+            justify-content: flex-start;
+        }
+        #timeSelector::-webkit-scrollbar {
+            display: none;
+        }
+        .timeBtn {
+            padding: 4px 6px;
+            background: transparent;
+            color: #848E9C;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            white-space: nowrap;
+            font-size: 11px;
+        }
+        .timeBtn.active {
+            color: #FFFFFF;
+        }
+        #canvasContainer {
+            position: relative;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #indicatorSelector {
+            display: flex;
+            background-color: #0B0E11;
+            padding: 8px 12px;
+            gap: 8px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            white-space: nowrap;
+            -webkit-overflow-scrolling: touch;
+        }
+        #indicatorSelector::-webkit-scrollbar {
+            display: none;
+        }
+        .indicatorBtn {
+            padding: 4px 5px;
+            background: transparent;
+            color: #848E9C;
+            border: none;
+            outline: none;
+            font-size: 11px;
+            cursor: pointer;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .indicatorBtn.active {
+            color: #FFFFFF;
+        }
+        .indicatorSeparator {
+            width: 1px;
+            background-color: #2B3139;
+            margin: 0 4px;
+            flex-shrink: 0;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #848E9C;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="timeSelector">
+            <button class="timeBtn" data-interval="timeline">分时</button>
+            <button class="timeBtn" data-interval="1m">1分</button>
+            <button class="timeBtn" data-interval="5m">5分</button>
+            <button class="timeBtn" data-interval="15m">15分</button>
+            <button class="timeBtn" data-interval="30m">30分</button>
+            <button class="timeBtn active" data-interval="1h">1小时</button>
+            <button class="timeBtn" data-interval="4h">4小时</button>
+            <button class="timeBtn" data-interval="1d">1天</button>
+            <button class="timeBtn" data-interval="7d">7天</button>
+        </div>
+        <div id="canvasContainer">
+            <canvas id="canvas"></canvas>
+            <div id="loading">加载中...</div>
+        </div>
+        <div id="indicatorSelector">
+            <button class="indicatorBtn" data-indicator="ma" data-type="main">MA</button>
+            <button class="indicatorBtn" data-indicator="ema" data-type="main">EMA</button>
+            <button class="indicatorBtn" data-indicator="boll" data-type="main">BOLL</button>
+            <button class="indicatorBtn" data-indicator="sar" data-type="main">SAR</button>
+            <button class="indicatorBtn" data-indicator="avl" data-type="main">AVL</button>
+            <button class="indicatorBtn" data-indicator="super" data-type="main">SUPER</button>
+            <div class="indicatorSeparator"></div>
+            <button class="indicatorBtn active" data-indicator="vol" data-type="sub">VOL</button>
+            <button class="indicatorBtn active" data-indicator="macd" data-type="sub">MACD</button>
+        </div>
+    </div>
+
+    <script>
+        class KlineChart {
+            constructor() {
+                this.canvas = document.getElementById('canvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.data = [];
+                this.rawData = [];
+                this.offsetX = 0;
+                this.candleWidth = 6;
+                this.candleSpacing = 2;
+                this.minCandleWidth = 2;
+                this.maxCandleWidth = 20;
+                this.currentInterval = '1h';
+                this.activeIndicators = new Set(['vol', 'macd']); // 初始化默认显示VOL和MACD
+                this.activeMainIndicator = null;
+                
+                this.isDragging = false;
+                this.isScaling = false;
+                this.longPressTimer = null;
+                this.crosshairActive = false;
+                this.crosshairX = 0;
+                this.crosshairY = 0;
+                this.lastTouchDistance = 0;
+                this.longPressStartX = 0;
+                this.longPressStartY = 0;
+                this.hasNotifiedInteractionStart = false; // 记录是否已通知RN交互开始
+                
+                this.indicators = {
+                    vol: { ma5: [], ma10: [] },
+                    macd: { dif: [], dea: [], macd: [] }
+                };
+                
+                // 立即计算布局和高度（宽度已知，所有高度都能确定）
+                this.width = window.innerWidth;
+                this.height = 600; // 初始化一个默认高度，会在initCanvas中更新
+                this.calculateLayoutAndSetHeight();
+                
+                console.log('[WebView] 构造函数完成，布局已计算:', {
+                    width: this.width,
+                    height: this.height,
+                    klineHeight: this.klineHeight,
+                    klineChartWidth: this.klineChartWidth,
+                    klineChartHeight: this.klineChartHeight
+                });
+                
+                this.initCanvas();
+                this.bindEvents();
+            }
+
+            initCanvas() {
+                const updateSize = () => {
+                    const dpr = window.devicePixelRatio || 1;
+                    const rect = this.canvas.getBoundingClientRect();
+                    this.canvas.width = rect.width * dpr;
+                    this.canvas.height = rect.height * dpr;
+                    this.ctx.scale(dpr, dpr);
+                    this.width = rect.width;
+                    this.height = rect.height;
+                    this.calculateLayout();
+                    // 只有在有数据时才绘制
+                    if (this.data.length > 0) {
+                        this.draw();
+                    }
+                };
+                updateSize();
+                window.addEventListener('resize', updateSize);
+            }
+
+            calculateLayoutAndSetHeight() {
+                // 布局常量（全部固定值）
+                const PERIOD_HEIGHT = 12;
+                const SPACING = 5;
+                const INDICATOR_HEIGHT = 60;
+                const DATE_HEIGHT = 20;  // 增加日期区域高度从15到20
+                const INDICATOR_BAR_HEIGHT = 35;
+                const EXTRA_PADDING = 15; // 额外的安全边距
+                
+                // K线高度 = 宽度 * 0.85（宽度已知）
+                this.klineHeight = this.width * 0.85;
+                this.indicatorHeight = INDICATOR_HEIGHT;
+                this.dateHeight = DATE_HEIGHT;
+                this.spacing = SPACING;
+                this.periodHeight = PERIOD_HEIGHT;
+                
+                // 计算各区域的Y坐标起点（从canvas顶部=0开始，不包括周期栏）
+                let currentY = 0; // canvas从0开始
+                this.klineY = currentY;
+                currentY += this.klineHeight + SPACING;
+                
+                // VOL区域（初始化时默认显示）
+                if (this.activeIndicators.has('vol')) {
+                    this.volY = currentY;
+                    currentY += INDICATOR_HEIGHT + SPACING;
+                } else {
+                    this.volY = null;
+                }
+                
+                // MACD区域（初始化时默认显示）
+                if (this.activeIndicators.has('macd')) {
+                    this.macdY = currentY;
+                    currentY += INDICATOR_HEIGHT + SPACING;
+                } else {
+                    this.macdY = null;
+                }
+                
+                // 时间日期区域
+                this.dateY = currentY;
+                currentY += DATE_HEIGHT + SPACING;
+                
+                // Canvas高度 = 从canvas顶部到时间日期区域底部 + 额外安全边距
+                const canvasHeight = currentY + EXTRA_PADDING;
+                
+                // 总高度 = 周期栏 + canvas高度 + 指标按钮栏
+                const totalHeight = PERIOD_HEIGHT + canvasHeight + INDICATOR_BAR_HEIGHT;
+                
+                // 设置canvasContainer高度
+                const container = document.getElementById('canvasContainer');
+                if (container) {
+                    container.style.height = canvasHeight + 'px';
+                    console.log('[WebView] 设置canvasContainer高度:', canvasHeight);
+                }
+                
+                // K线图绘制区域的padding
+                this.padding = { top: 5, right: 5, bottom: 5, left: 5 };
+                this.klineChartHeight = this.klineHeight - this.padding.top - this.padding.bottom;
+                this.klineChartWidth = this.width - this.padding.left - this.padding.right;
+                
+                // 通知React Native总高度
+                if (window.ReactNativeWebView) {
+                    window.ReactNativeWebView.postMessage(JSON.stringify({
+                        type: 'HEIGHT_CHANGE',
+                        height: totalHeight
+                    }));
+                    console.log('[WebView] 初始化通知RN总高度:', totalHeight, 
+                               'canvas高度:', canvasHeight,
+                               'K线高度:', this.klineHeight,
+                               '宽度:', this.width);
+                }
+            }
+
+            calculateLayout() {
+                // 窗口大小改变时重新计算（调用完整的计算方法）
+                this.calculateLayoutAndSetHeight();
+            }
+
+            // 格式化价格显示（根据价格大小动态调整精度）
+            formatPrice(price) {
+                if (price === null || price === undefined) return '-';
+                const absPrice = Math.abs(price);
+                if (absPrice >= 1000) {
+                    return price.toFixed(2);
+                } else if (absPrice >= 1) {
+                    return price.toFixed(4);
+                } else if (absPrice >= 0.0001) {
+                    return price.toFixed(6);
+                } else {
+                    return price.toFixed(8);
+                }
+            }
+
+            bindEvents() {
+                let touches = [];
+                let startOffsetX = 0;
+                let startCandleWidth = 0;
+                let startX = 0;
+
+                this.canvas.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    touches = Array.from(e.touches);
+                    
+                    if (touches.length === 1) {
+                        this.isDragging = true;
+                        startOffsetX = this.offsetX;
+                        startX = touches[0].clientX;
+                        this.longPressStartX = touches[0].clientX;
+                        this.longPressStartY = touches[0].clientY;
+                        this.hasNotifiedInteractionStart = false; // 重置标记
+                        
+                        this.longPressTimer = setTimeout(() => {
+                            // 检查手指是否基本没移动（容差5像素）
+                            const dx = Math.abs(touches[0].clientX - this.longPressStartX);
+                            const dy = Math.abs(touches[0].clientY - this.longPressStartY);
+                            if (dx <= 5 && dy <= 5) {
+                                this.crosshairActive = true;
+                                const rect = this.canvas.getBoundingClientRect();
+                                this.crosshairX = touches[0].clientX - rect.left;
+                                this.crosshairY = touches[0].clientY - rect.top;
+                                this.isDragging = false;
+                                
+                                // 十字线激活时立即通知RN禁用ScrollView
+                                this.hasNotifiedInteractionStart = true;
+                                if (window.ReactNativeWebView) {
+                                    window.ReactNativeWebView.postMessage(JSON.stringify({
+                                        type: 'INTERACTION_START'
+                                    }));
+                                }
+                                
+                                this.draw();
+                            }
+                        }, 1000);
+                    } else if (touches.length === 2) {
+                        clearTimeout(this.longPressTimer);
+                        this.isScaling = true;
+                        this.isDragging = false;
+                        startCandleWidth = this.candleWidth;
+                        this.lastTouchDistance = this.getTouchDistance(touches);
+                    }
+                }, { passive: false });
+
+                this.canvas.addEventListener('touchmove', (e) => {
+                    e.preventDefault();
+                    touches = Array.from(e.touches);
+                    
+                    if (this.longPressTimer) {
+                        const dx = Math.abs(touches[0].clientX - this.longPressStartX);
+                        const dy = Math.abs(touches[0].clientY - this.longPressStartY);
+                        // 移动超过15像素就取消长按
+                        if (dx > 15 || dy > 15) {
+                            clearTimeout(this.longPressTimer);
+                            this.longPressTimer = null;
+                        }
+                    }
+                    
+                    if (this.crosshairActive && touches.length === 1) {
+                        const rect = this.canvas.getBoundingClientRect();
+                        const touchX = touches[0].clientX - rect.left;
+                        const touchY = touches[0].clientY - rect.top;
+                        
+                        // X轴对齐到蜡烛中心
+                        const candleStep = (this.candleWidth + this.candleSpacing);
+                        const fractionalOffset = this.offsetX - Math.floor(this.offsetX);
+                        const relativeX = touchX - this.padding.left + fractionalOffset * candleStep;
+                        const candleIndex = Math.floor(relativeX / candleStep);
+                        this.crosshairX = this.padding.left + (candleIndex - fractionalOffset) * candleStep + this.candleWidth / 2;
+                        
+                        // Y轴直接跟随手指位置
+                        this.crosshairY = touchY;
+                        
+                        this.draw();
+                    } else if (this.isDragging && touches.length === 1) {
+                        const dx = touches[0].clientX - startX;
+                        
+                        // 当移动超过10像素时，通知RN禁用滚动
+                        if (!this.hasNotifiedInteractionStart && Math.abs(dx) > 10) {
+                            this.hasNotifiedInteractionStart = true;
+                            if (window.ReactNativeWebView) {
+                                window.ReactNativeWebView.postMessage(JSON.stringify({
+                                    type: 'INTERACTION_START'
+                                }));
+                            }
+                        }
+                        
+                        const maxOffset = Math.max(0, this.data.length - Math.floor(this.getVisibleCandleCount() / 2));
+                        const dragSensitivity = 1 / (this.candleWidth + this.candleSpacing);
+                        this.offsetX = Math.max(0, Math.min(maxOffset, startOffsetX - dx * dragSensitivity));
+                        this.draw();
+                    } else if (this.isScaling && touches.length === 2) {
+                        // 通知RN禁用滚动（缩放时）
+                        if (!this.hasNotifiedInteractionStart) {
+                            this.hasNotifiedInteractionStart = true;
+                            if (window.ReactNativeWebView) {
+                                window.ReactNativeWebView.postMessage(JSON.stringify({
+                                    type: 'INTERACTION_START'
+                                }));
+                            }
+                        }
+                        const currentDistance = this.getTouchDistance(touches);
+                        const scale = currentDistance / this.lastTouchDistance;
+                        const newWidth = startCandleWidth * scale;
+                        const oldCandleWidth = this.candleWidth;
+                        this.candleWidth = Math.max(this.minCandleWidth, Math.min(this.maxCandleWidth, newWidth));
+                        
+                        // 计算中心点的蜡烛索引
+                        const centerX = this.width / 2;
+                        const oldVisibleCount = this.getVisibleCandleCountForWidth(oldCandleWidth);
+                        const newVisibleCount = this.getVisibleCandleCount();
+                        
+                        // 调整 offsetX 使缩放以中心为基点
+                        const centerCandleIndex = this.offsetX + oldVisibleCount / 2;
+                        this.offsetX = centerCandleIndex - newVisibleCount / 2;
+                        
+                        const maxOffset = Math.max(0, this.data.length - Math.floor(newVisibleCount / 2));
+                        this.offsetX = Math.max(0, Math.min(maxOffset, this.offsetX));
+                        
+                        this.draw();
+                    }
+                }, { passive: false });
+
+                this.canvas.addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    
+                    // 第一件事：立即清除长按定时器，防止延迟触发
+                    if (this.longPressTimer) {
+                        clearTimeout(this.longPressTimer);
+                        this.longPressTimer = null;
+                    }
+                    
+                    if (e.touches.length === 0) {
+                        // 所有手指都离开了
+                        this.isDragging = false;
+                        this.isScaling = false;
+                        
+                        // 如果有交互或十字线激活，通知RN恢复ScrollView
+                        if (this.hasNotifiedInteractionStart && window.ReactNativeWebView) {
+                            this.hasNotifiedInteractionStart = false;
+                            window.ReactNativeWebView.postMessage(JSON.stringify({
+                                type: 'INTERACTION_END'
+                            }));
+                        }
+                        
+                        // 清除十字线状态
+                        if (this.crosshairActive) {
+                            this.crosshairActive = false;
+                        }
+                        
+                        this.draw();
+                    } else if (e.touches.length === 1 && this.isScaling) {
+                        this.isScaling = false;
+                        this.isDragging = true;
+                        touches = Array.from(e.touches);
+                        startOffsetX = this.offsetX;
+                        startX = touches[0].clientX;
+                    }
+                }, { passive: false });
+
+                // 处理touchcancel事件（当系统中断触摸时，如ScrollView开始滚动）
+                this.canvas.addEventListener('touchcancel', (e) => {
+                    e.preventDefault();
+                    
+                    // 立即清除长按定时器
+                    if (this.longPressTimer) {
+                        clearTimeout(this.longPressTimer);
+                        this.longPressTimer = null;
+                    }
+                    
+                    // 清除所有交互状态
+                    this.isDragging = false;
+                    this.isScaling = false;
+                    
+                    // 通知RN恢复ScrollView
+                    if (this.hasNotifiedInteractionStart && window.ReactNativeWebView) {
+                        this.hasNotifiedInteractionStart = false;
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'INTERACTION_END'
+                        }));
+                    }
+                    
+                    // 清除十字线
+                    if (this.crosshairActive) {
+                        this.crosshairActive = false;
+                        this.draw();
+                    }
+                }, { passive: false });
+            }
+
+            getTouchDistance(touches) {
+                const dx = touches[0].clientX - touches[1].clientX;
+                const dy = touches[0].clientY - touches[1].clientY;
+                return Math.sqrt(dx * dx + dy * dy);
+            }
+
+            getVisibleCandleCount() {
+                if (!this.klineChartWidth || this.klineChartWidth <= 0) {
+                    console.warn('[WebView] klineChartWidth未正确初始化:', this.klineChartWidth);
+                    return 50; // 返回一个默认值
+                }
+                const count = Math.floor(this.klineChartWidth / (this.candleWidth + this.candleSpacing));
+                return count > 0 ? count : 50;
+            }
+
+            getVisibleCandleCountForWidth(candleWidth) {
+                return Math.floor(this.klineChartWidth / (candleWidth + this.candleSpacing));
+            }
+
+            aggregateData(interval) {
+                if (!this.rawData.length) return [];
+
+                const intervals = {
+                    'timeline': 1 * 60 * 1000,
+                    '1m': 1 * 60 * 1000,
+                    '5m': 5 * 60 * 1000,
+                    '15m': 15 * 60 * 1000,
+                    '30m': 30 * 60 * 1000,
+                    '1h': 60 * 60 * 1000,
+                    '4h': 4 * 60 * 60 * 1000,
+                    '1d': 24 * 60 * 60 * 1000,
+                    '3d': 3 * 24 * 60 * 60 * 1000,
+                    '7d': 7 * 24 * 60 * 60 * 1000,
+                    '1M': 30 * 24 * 60 * 60 * 1000,
+                };
+
+                const period = intervals[interval] || intervals['1h'];
+                console.log('[WebView] aggregateData调用:', {
+                    interval,
+                    period,
+                    periodDays: period / (24 * 60 * 60 * 1000),
+                    rawDataLength: this.rawData.length,
+                    rawDataTimeRange: this.rawData.length > 0 ? {
+                        first: new Date(this.rawData[0].timestamp).toISOString(),
+                        last: new Date(this.rawData[this.rawData.length - 1].timestamp).toISOString()
+                    } : null
+                });
+                
+                const result = [];
+                let currentPeriod = null;
+                let periodData = null;
+
+                this.rawData.forEach(item => {
+                    const periodStart = Math.floor(item.timestamp / period) * period;
+                    
+                    if (periodStart !== currentPeriod) {
+                        if (periodData) result.push(periodData);
+                        currentPeriod = periodStart;
+                        periodData = {
+                            timestamp: periodStart,
+                            open: item.open,
+                            high: item.high,
+                            low: item.low,
+                            close: item.close,
+                            volume: item.volume
+                        };
+                    } else {
+                        periodData.high = Math.max(periodData.high, item.high);
+                        periodData.low = Math.min(periodData.low, item.low);
+                        periodData.close = item.close;
+                        periodData.volume += item.volume;
+                    }
+                });
+
+                if (periodData) result.push(periodData);
+                
+                console.log('[WebView] aggregateData结果:', {
+                    interval,
+                    resultLength: result.length,
+                    resultTimeRange: result.length > 0 ? {
+                        first: new Date(result[0].timestamp).toISOString(),
+                        last: new Date(result[result.length - 1].timestamp).toISOString()
+                    } : null
+                });
+                
+                // 验证并修正所有聚合后的数据
+                return result.map(item => this.validateOHLC(item));
+            }
+
+            calculateIndicators() {
+                this.indicators.vol.ma5 = this.calculateMA(this.data.map(d => d.volume), 5);
+                this.indicators.vol.ma10 = this.calculateMA(this.data.map(d => d.volume), 10);
+                
+                const macdData = this.calculateMACD(this.data.map(d => d.close));
+                this.indicators.macd.dif = macdData.dif;
+                this.indicators.macd.dea = macdData.dea;
+                this.indicators.macd.macd = macdData.macd;
+                
+                // 计算MA
+                const prices = this.data.map(d => d.close);
+                this.indicators.ma = {
+                    ma7: this.calculateMA(prices, 7),
+                    ma25: this.calculateMA(prices, 25),
+                    ma99: this.calculateMA(prices, 99)
+                };
+                
+                // 计算EMA
+                this.indicators.ema = {
+                    ema7: this.calculateEMA(prices, 7),
+                    ema25: this.calculateEMA(prices, 25),
+                    ema99: this.calculateEMA(prices, 99)
+                };
+                
+                // 计算BOLL
+                this.indicators.boll = this.calculateBOLL(prices, 20, 2);
+                
+                // 计算SAR
+                this.indicators.sar = this.calculateSAR(this.data, 0.02, 0.2);
+                
+                // 计算AVL
+                this.indicators.avl = this.calculateAVL(this.data);
+                
+                // 计算SUPER
+                this.indicators.super = this.calculateSuperTrend(this.data, 10, 3);
+            }
+
+            calculateMA(data, period) {
+                const result = [];
+                for (let i = 0; i < data.length; i++) {
+                    if (i < period - 1) {
+                        result.push(null);
+                    } else {
+                        let sum = 0;
+                        for (let j = 0; j < period; j++) {
+                            sum += data[i - j];
+                        }
+                        result.push(sum / period);
+                    }
+                }
+                return result;
+            }
+
+            calculateEMA(data, period) {
+                const result = [];
+                const multiplier = 2 / (period + 1);
+                let ema = data[0];
+                result.push(ema);
+                
+                for (let i = 1; i < data.length; i++) {
+                    ema = (data[i] - ema) * multiplier + ema;
+                    result.push(ema);
+                }
+                return result;
+            }
+
+            calculateMACD(prices) {
+                const ema12 = this.calculateEMA(prices, 12);
+                const ema26 = this.calculateEMA(prices, 26);
+                const dif = ema12.map((v, i) => v - ema26[i]);
+                const dea = this.calculateEMA(dif, 9);
+                const macd = dif.map((v, i) => (v - dea[i]) * 2);
+                return { dif, dea, macd };
+            }
+
+            calculateBOLL(prices, period, multiplier) {
+                const ma = this.calculateMA(prices, period);
+                const up = [];
+                const dn = [];
+                
+                for (let i = 0; i < prices.length; i++) {
+                    if (i < period - 1) {
+                        up.push(null);
+                        dn.push(null);
+                    } else {
+                        let sum = 0;
+                        for (let j = 0; j < period; j++) {
+                            sum += Math.pow(prices[i - j] - ma[i], 2);
+                        }
+                        const std = Math.sqrt(sum / period);
+                        up.push(ma[i] + multiplier * std);
+                        dn.push(ma[i] - multiplier * std);
+                    }
+                }
+                
+                return { mb: ma, up, dn };
+            }
+
+            calculateSAR(data, step, maxStep) {
+                const result = [];
+                if (data.length < 2) return result;
+                
+                let isUptrend = data[1].close > data[0].close;
+                let sar = isUptrend ? data[0].low : data[0].high;
+                let ep = isUptrend ? data[0].high : data[0].low;
+                let af = step;
+                
+                result.push(sar);
+                
+                for (let i = 1; i < data.length; i++) {
+                    const current = data[i];
+                    sar = sar + af * (ep - sar);
+                    
+                    if (isUptrend) {
+                        if (current.low < sar) {
+                            isUptrend = false;
+                            sar = ep;
+                            ep = current.low;
+                            af = step;
+                        } else {
+                            if (current.high > ep) {
+                                ep = current.high;
+                                af = Math.min(af + step, maxStep);
+                            }
+                        }
+                    } else {
+                        if (current.high > sar) {
+                            isUptrend = true;
+                            sar = ep;
+                            ep = current.high;
+                            af = step;
+                        } else {
+                            if (current.low < ep) {
+                                ep = current.low;
+                                af = Math.min(af + step, maxStep);
+                            }
+                        }
+                    }
+                    
+                    result.push({ value: sar, isUptrend });
+                }
+                
+                return result;
+            }
+
+            calculateAVL(data) {
+                // AVL = Average Price Line (均价线)
+                // 公式: 每根K线的均价 = (高 + 开 + 低 + 收) / 4
+                const result = [];
+                
+                for (let i = 0; i < data.length; i++) {
+                    const avgPrice = (data[i].high + data[i].open + data[i].low + data[i].close) / 4;
+                    result.push(avgPrice);
+                }
+                
+                return result;
+            }
+
+            calculateATR(data, period) {
+                const tr = [];
+                for (let i = 0; i < data.length; i++) {
+                    if (i === 0) {
+                        tr.push(data[i].high - data[i].low);
+                    } else {
+                        const hl = data[i].high - data[i].low;
+                        const hc = Math.abs(data[i].high - data[i - 1].close);
+                        const lc = Math.abs(data[i].low - data[i - 1].close);
+                        tr.push(Math.max(hl, hc, lc));
+                    }
+                }
+                return this.calculateMA(tr, period);
+            }
+
+            calculateSuperTrend(data, period, multiplier) {
+                const atr = this.calculateATR(data, period);
+                const result = [];
+                
+                for (let i = 0; i < data.length; i++) {
+                    if (i < period - 1 || atr[i] === null) {
+                        result.push({ value: null, isUptrend: true });
+                        continue;
+                    }
+                    
+                    const hl2 = (data[i].high + data[i].low) / 2;
+                    const basicUpperBand = hl2 + multiplier * atr[i];
+                    const basicLowerBand = hl2 - multiplier * atr[i];
+                    
+                    let finalUpperBand = basicUpperBand;
+                    let finalLowerBand = basicLowerBand;
+                    
+                    if (i > 0 && result[i - 1].value !== null) {
+                        const prevResult = result[i - 1];
+                        
+                        // 计算final upper band
+                        if (basicUpperBand < prevResult.upperBand || data[i - 1].close > prevResult.upperBand) {
+                            finalUpperBand = basicUpperBand;
+                        } else {
+                            finalUpperBand = prevResult.upperBand;
+                        }
+                        
+                        // 计算final lower band
+                        if (basicLowerBand > prevResult.lowerBand || data[i - 1].close < prevResult.lowerBand) {
+                            finalLowerBand = basicLowerBand;
+                        } else {
+                            finalLowerBand = prevResult.lowerBand;
+                        }
+                    }
+                    
+                    // 决定趋势和超级趋势线
+                    let supertrend = finalLowerBand;
+                    let isUptrend = true;
+                    
+                    if (i > 0 && result[i - 1].value !== null) {
+                        if (result[i - 1].isUptrend) {
+                            if (data[i].close <= finalLowerBand) {
+                                isUptrend = false;
+                                supertrend = finalUpperBand;
+                            } else {
+                                supertrend = finalLowerBand;
+                            }
+                        } else {
+                            if (data[i].close >= finalUpperBand) {
+                                isUptrend = true;
+                                supertrend = finalLowerBand;
+                            } else {
+                                isUptrend = false;
+                                supertrend = finalUpperBand;
+                            }
+                        }
+                    }
+                    
+                    result.push({ 
+                        value: supertrend, 
+                        isUptrend: isUptrend,
+                        upperBand: finalUpperBand,
+                        lowerBand: finalLowerBand
+                    });
+                }
+                
+                return result;
+            }
+
+            setData(data, interval = '1h') {
+                console.log('[WebView] setData被调用:', {
+                    dataLength: data.length,
+                    interval,
+                    klineChartWidth: this.klineChartWidth,
+                    firstItem: data[0],
+                    lastItem: data[data.length - 1]
+                });
+                
+                // 如果收到空数据，立即清空并返回
+                if (!data || data.length === 0) {
+                    console.log('[WebView] 收到空数据，清空画布');
+                    this.data = [];
+                    this.rawData = [];
+                    this.indicators = {
+                        vol: { ma5: [], ma10: [] },
+                        macd: { dif: [], dea: [], macd: [] }
+                    };
+                    this.currentInterval = interval;
+                    this.draw(); // 这会清空画布
+                    return;
+                }
+                
+                // 确保布局已经计算完成
+                if (!this.klineChartWidth || this.klineChartWidth <= 0) {
+                    console.warn('[WebView] 布局未初始化，重新计算');
+                    this.calculateLayoutAndSetHeight();
+                }
+                
+                // 数据验证和修正：确保high/low/open/close的逻辑正确性
+                this.rawData = data.map(item => this.validateOHLC(item));
+                this.currentInterval = interval;
+                this.data = this.aggregateData(interval);
+
+                if (!this.data || this.data.length === 0){
+                    document.getElementById("loading").innerHTML = "无数据"
+                }
+
+                console.log('[WebView] aggregateData后:', {
+                    dataLength: this.data.length,
+                    interval: this.currentInterval,
+                    firstItem: this.data[0],
+                    lastItem: this.data[this.data.length - 1]
+                });
+                this.calculateIndicators();
+                
+                const visibleCount = this.getVisibleCandleCount();
+                this.offsetX = Math.max(0, this.data.length - Math.floor(visibleCount / 2));
+                console.log('[WebView] 设置offsetX:', this.offsetX, 'visibleCount:', visibleCount);
+                
+                document.getElementById('loading').style.display = 'none';
+                this.draw();
+            }
+
+            // 验证并修正OHLC数据的逻辑正确性
+            validateOHLC(item) {
+                const { open, high, low, close } = item;
+                // 确保high是最大值，low是最小值
+                const actualHigh = Math.max(open, high, low, close);
+                const actualLow = Math.min(open, high, low, close);
+                
+                return {
+                    ...item,
+                    high: actualHigh,
+                    low: actualLow
+                };
+            }
+
+            // 增量更新最新蜡烛数据
+            updateLatestCandle(latestCandle) {
+                if (!this.rawData || this.rawData.length === 0) {
+                    console.log('[WebView] 没有历史数据，跳过增量更新');
+                    return;
+                }
+                
+                // 验证并修正数据
+                const validatedCandle = this.validateOHLC(latestCandle);
+                
+                const lastCandle = this.rawData[this.rawData.length - 1];
+                const lastTimestamp = lastCandle.timestamp;
+                const newTimestamp = validatedCandle.timestamp;
+                
+                // 判断是更新还是新增
+                // 计算周期临界点
+                const intervals = {
+                    'timeline': 1 * 60 * 1000,
+                    '1m': 1 * 60 * 1000,
+                    '5m': 5 * 60 * 1000,
+                    '15m': 15 * 60 * 1000,
+                    '30m': 30 * 60 * 1000,
+                    '1h': 60 * 60 * 1000,
+                    '4h': 4 * 60 * 60 * 1000,
+                    '1d': 24 * 60 * 60 * 1000,
+                    '3d': 3 * 24 * 60 * 60 * 1000,
+                    '7d': 7 * 24 * 60 * 60 * 1000,
+                    '1M': 30 * 24 * 60 * 60 * 1000,
+                };
+                const period = intervals[this.currentInterval] || intervals['1h'];
+                
+                // 计算两根蜡烛所属的周期
+                const lastPeriod = Math.floor(lastTimestamp / period) * period;
+                const newPeriod = Math.floor(newTimestamp / period) * period;
+                
+                console.log('[WebView] 时间戳比对:', {
+                    lastTimestamp,
+                    newTimestamp,
+                    lastPeriod,
+                    newPeriod,
+                    lastDate: new Date(lastTimestamp).toISOString(),
+                    newDate: new Date(newTimestamp).toISOString()
+                });
+                
+                if (lastPeriod === newPeriod) {
+                    // 同一周期：更新最后一根蜡烛的收盘价
+                    console.log('[WebView] 同一周期，更新收盘价:', {
+                        old: lastCandle.close,
+                        new: validatedCandle.close,
+                        oldVolume: lastCandle.volume,
+                        newVolume: validatedCandle.volume
+                    });
+                    lastCandle.close = validatedCandle.close;
+                    lastCandle.high = Math.max(lastCandle.high, validatedCandle.high);
+                    lastCandle.low = Math.min(lastCandle.low, validatedCandle.low);
+                    // 同一周期内不累加volume，而是使用最新的volume值
+                    lastCandle.volume = validatedCandle.volume;
+                } else {
+                    // 不同周期：新增蜡烛，删除最旧的
+                    console.log('[WebView] 新周期，新增蜡烛');
+                    this.rawData.shift(); // 移除最旧的
+                    this.rawData.push(validatedCandle); // 添加最新的
+                }
+                
+                // 重新计算数据和指标
+                const currentVisibleIndex = this.offsetX;
+                const currentVisibleCount = this.getVisibleCandleCount();
+                
+                this.data = this.aggregateData(this.currentInterval);
+                this.calculateIndicators();
+                
+                // 保持当前位置，不自动跟随最新数据
+                // 确保位置不超出范围
+                const maxOffset = Math.max(0, this.data.length - Math.floor(currentVisibleCount / 2));
+                this.offsetX = Math.min(currentVisibleIndex, maxOffset);
+                
+                this.draw();
+            }
+
+            changeInterval(interval) {
+                console.log('[WebView] 切换周期:', interval);
+                
+                // 显示loading
+                document.getElementById('loading').style.display = 'flex';
+                
+                // 清空所有数据
+                this.data = [];
+                this.rawData = [];
+                
+                // 清空所有指标数据
+                this.indicators = {
+                    vol: { ma5: [], ma10: [] },
+                    macd: { dif: [], dea: [], macd: [] },
+                    ma: { ma7: [], ma25: [], ma99: [] },
+                    ema: { ema7: [], ema25: [], ema99: [] },
+                    boll: { upper: [], middle: [], lower: [] },
+                    sar: [],
+                    avl: [],
+                    super: []
+                };
+                
+                // 设置新周期
+                this.currentInterval = interval;
+                
+                // 立即清空画布并强制重绘
+                this.draw(); // 调用draw()会先清空画布，因为this.data已经是空数组
+                
+                console.log('[WebView] 已清空所有数据和画布，等待RN发送新数据');
+            }
+
+            toggleIndicator(indicator, type) {
+                if (type === 'main') {
+                    // 主图指标单选
+                    if (this.activeMainIndicator === indicator) {
+                        this.activeMainIndicator = null;
+                    } else {
+                        this.activeMainIndicator = indicator;
+                    }
+                } else {
+                    // 副图指标多选
+                    if (this.activeIndicators.has(indicator)) {
+                        this.activeIndicators.delete(indicator);
+                    } else {
+                        this.activeIndicators.add(indicator);
+                    }
+                }
+                
+                // 重新计算布局和高度
+                this.calculateLayoutAndSetHeight();
+                this.draw();
+            }
+            
+            getVisibleData() {
+                const start = Math.floor(this.offsetX);
+                const end = Math.min(start + this.getVisibleCandleCount() + 1, this.data.length);
+                return {
+                    data: this.data.slice(start, end),
+                    startIndex: start
+                };
+            }
+
+            getPriceRange(visibleData) {
+                if (!visibleData.length) return { min: 0, max: 100 };
+                let min = Math.min(...visibleData.map(d => d.low));
+                let max = Math.max(...visibleData.map(d => d.high));
+                // 使用足够的padding确保所有蜡烛都在网格内且上下有余量
+                const range = max - min;
+                const padding = range * 0.1; // 上下各留10%余量
+                return { min: min - padding, max: max + padding };
+            }
+
+            priceToY(price, priceRange, offsetY = null) {
+                // 如果没有指定offsetY，使用K线区域的起点
+                if (offsetY === null) {
+                    offsetY = this.klineY;
+                }
+                const ratio = (price - priceRange.min) / (priceRange.max - priceRange.min);
+                return offsetY + this.padding.top + this.klineChartHeight * (1 - ratio);
+            }
+
+            draw() {
+                const ctx = this.ctx;
+                
+                // 先清空画布
+                ctx.fillStyle = '#0B0E11';
+                ctx.fillRect(0, 0, this.width, this.height);
+                
+                // 如果没有数据，只清空不绘制
+                if (!this.data || this.data.length === 0) {
+                    console.log('[WebView] 没有数据，仅清空画布');
+                    return;
+                }
+                
+                const { data: visibleData, startIndex } = this.getVisibleData();
+                
+                console.log('[WebView] draw() 被调用:', {
+                    currentInterval: this.currentInterval,
+                    dataLength: this.data.length,
+                    visibleDataLength: visibleData.length,
+                    offsetX: this.offsetX
+                });
+                
+                if (!visibleData.length) {
+                    console.log('[WebView] visibleData为空，无法绘制');
+                    return;
+                }
+
+                const priceRange = this.getPriceRange(visibleData);
+                
+                // 根据时间周期选择不同的绘制方式
+                if (this.currentInterval === 'timeline') {
+                    this.drawTimelineChart(visibleData, startIndex, priceRange);
+                } else {
+                    this.drawKlineChart(visibleData, startIndex, priceRange);
+                }
+                
+                // 使用预计算的Y坐标绘制指标
+                if (this.activeIndicators.has('vol') && this.volY !== null) {
+                    this.drawVolumeChart(visibleData, startIndex, this.volY);
+                }
+                if (this.activeIndicators.has('macd') && this.macdY !== null) {
+                    this.drawMACDChart(visibleData, startIndex, this.macdY);
+                }
+                
+                if (this.crosshairActive) {
+                    this.drawCrosshair(visibleData, startIndex, priceRange);
+                }
+                
+                // 使用预计算的dateY坐标绘制时间日期
+                const fractionalOffset = this.offsetX - Math.floor(this.offsetX);
+                console.log('[WebView] 绘制时间日期:', {
+                    dateY: this.dateY,
+                    drawY: this.dateY + 10,
+                    canvasHeight: this.height,
+                    klineY: this.klineY,
+                    volY: this.volY,
+                    macdY: this.macdY
+                });
+                this.drawXAxisDatesForIndicator(visibleData, fractionalOffset, this.dateY + 10);
+            }
+
+            drawKlineChart(visibleData, startIndex, priceRange) {
+                const ctx = this.ctx;
+                const fractionalOffset = this.offsetX - Math.floor(this.offsetX);
+                
+                this.drawPriceGrid(priceRange);
+                
+                let maxPrice = -Infinity, minPrice = Infinity;
+                let maxIndex = 0, minIndex = 0;
+                visibleData.forEach((item, i) => {
+                    if (item.high > maxPrice) {
+                        maxPrice = item.high;
+                        maxIndex = i;
+                    }
+                    if (item.low < minPrice) {
+                        minPrice = item.low;
+                        minIndex = i;
+                    }
+                });
+                
+                visibleData.forEach((item, i) => {
+                    const x = this.padding.left + (i - fractionalOffset) * (this.candleWidth + this.candleSpacing);
+                    const openY = this.priceToY(item.open, priceRange);
+                    const closeY = this.priceToY(item.close, priceRange);
+                    const highY = this.priceToY(item.high, priceRange);
+                    const lowY = this.priceToY(item.low, priceRange);
+
+                    const isRising = item.close >= item.open;
+                    const color = isRising ? '#0ECB81' : '#F6465D';
+
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(x + this.candleWidth / 2, highY);
+                    ctx.lineTo(x + this.candleWidth / 2, lowY);
+                    ctx.stroke();
+
+                    const bodyHeight = Math.abs(closeY - openY);
+                    const bodyY = Math.min(openY, closeY);
+                    ctx.fillStyle = color;
+                    if (bodyHeight < 1) {
+                        ctx.fillRect(x, bodyY, this.candleWidth, 1);
+                    } else {
+                        ctx.fillRect(x, bodyY, this.candleWidth, bodyHeight);
+                    }
+                });
+                
+                const maxX = this.padding.left + (maxIndex - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                const maxY = this.priceToY(maxPrice, priceRange);
+                this.drawPriceTag(maxX, maxY, this.formatPrice(maxPrice), '#FFFFFF', true);
+                
+                const minX = this.padding.left + (minIndex - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                const minY = this.priceToY(minPrice, priceRange);
+                this.drawPriceTag(minX, minY, this.formatPrice(minPrice), '#FFFFFF', false);
+                
+                // 使用可见数据最后一根蜡烛的价格，而不是所有数据的最后一根
+                const currentPrice = visibleData[visibleData.length - 1].close;
+                const currentY = this.priceToY(currentPrice, priceRange);
+                ctx.setLineDash([4, 4]);
+                ctx.strokeStyle = '#848E9C';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(this.padding.left, currentY);
+                ctx.lineTo(this.width - this.padding.right, currentY);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                
+                // 在右边显示当前价格标签
+                const priceText = this.formatPrice(currentPrice);
+                ctx.font = '10px monospace';
+                const priceWidth = ctx.measureText(priceText).width;
+                const boxWidth = priceWidth + 8;
+                const boxX = this.width - boxWidth - 5;
+                // 白色背景
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(boxX, currentY - 10, boxWidth, 20);
+                // 黑色文字
+                ctx.fillStyle = '#000000';
+                ctx.textAlign = 'left';
+                ctx.fillText(priceText, boxX + 4, currentY + 4);
+                
+                // 绘制主图指标
+                this.drawMainIndicator(visibleData, startIndex, priceRange, fractionalOffset);
+            }
+
+            drawTimelineChart(visibleData, startIndex, priceRange) {
+                const ctx = this.ctx;
+                const fractionalOffset = this.offsetX - Math.floor(this.offsetX);
+                
+                // 绘制价格网格
+                this.drawPriceGrid(priceRange);
+                
+                // 找出最高价和最低价
+                let maxPrice = -Infinity, minPrice = Infinity;
+                let maxIndex = 0, minIndex = 0;
+                visibleData.forEach((item, i) => {
+                    if (item.close > maxPrice) {
+                        maxPrice = item.close;
+                        maxIndex = i;
+                    }
+                    if (item.close < minPrice) {
+                        minPrice = item.close;
+                        minIndex = i;
+                    }
+                });
+                
+                // 绘制面积填充
+                ctx.beginPath();
+                const firstX = this.padding.left;
+                const firstY = this.priceToY(visibleData[0].close, priceRange);
+                ctx.moveTo(firstX, firstY);
+                
+                // 绘制价格线路径
+                for (let i = 0; i < visibleData.length; i++) {
+                    const x = this.padding.left + (i - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                    const y = this.priceToY(visibleData[i].close, priceRange);
+                    ctx.lineTo(x, y);
+                }
+                
+                // 完成填充区域路径
+                const lastX = this.padding.left + (visibleData.length - 1 - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                const bottomY = this.padding.top + this.klineChartHeight;
+                ctx.lineTo(lastX, bottomY);
+                ctx.lineTo(firstX, bottomY);
+                ctx.closePath();
+                
+                // 渐变填充
+                const gradient = ctx.createLinearGradient(0, this.padding.top, 0, bottomY);
+                gradient.addColorStop(0, 'rgba(88, 189, 125, 0.3)');
+                gradient.addColorStop(1, 'rgba(88, 189, 125, 0.01)');
+                ctx.fillStyle = gradient;
+                ctx.fill();
+                
+                // 绘制价格线
+                ctx.beginPath();
+                ctx.moveTo(firstX, firstY);
+                for (let i = 0; i < visibleData.length; i++) {
+                    const x = this.padding.left + (i - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                    const y = this.priceToY(visibleData[i].close, priceRange);
+                    ctx.lineTo(x, y);
+                }
+                ctx.strokeStyle = '#58BD7D';
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+                
+                // 标注最高价和最低价
+                const maxX = this.padding.left + (maxIndex - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                const maxY = this.priceToY(maxPrice, priceRange);
+                this.drawPriceTag(maxX, maxY, this.formatPrice(maxPrice), '#FFFFFF', true);
+                
+                const minX = this.padding.left + (minIndex - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                const minY = this.priceToY(minPrice, priceRange);
+                this.drawPriceTag(minX, minY, this.formatPrice(minPrice), '#FFFFFF', false);
+                
+                // 标注当前价格（虚线） - 使用可见数据最后一根
+                const currentPrice = visibleData[visibleData.length - 1].close;
+                const currentY = this.priceToY(currentPrice, priceRange);
+                ctx.setLineDash([4, 4]);
+                ctx.strokeStyle = '#848E9C';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(this.padding.left, currentY);
+                ctx.lineTo(this.width - this.padding.right, currentY);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                
+                // 在右边显示当前价格标签
+                const priceText = this.formatPrice(currentPrice);
+                ctx.font = '10px monospace';
+                const priceWidth = ctx.measureText(priceText).width;
+                const boxWidth = priceWidth + 8;
+                const boxX = this.width - boxWidth - 5;
+                // 白色背景
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(boxX, currentY - 10, boxWidth, 20);
+                // 黑色文字
+                ctx.fillStyle = '#000000';
+                ctx.textAlign = 'left';
+                ctx.fillText(priceText, boxX + 4, currentY + 4);
+            }
+
+            drawPriceTag(x, y, text, color, isHigh) {
+                const ctx = this.ctx;
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(x, y);
+                ctx.lineTo(x + 30, y);
+                ctx.stroke();
+                
+                ctx.fillStyle = color;
+                ctx.font = '9px monospace';
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(text, x + 32, y);
+                ctx.textBaseline = 'alphabetic';
+            }
+
+            drawPriceGrid(priceRange) {
+                const ctx = this.ctx;
+                const gridCount = 5;
+                const step = (priceRange.max - priceRange.min) / gridCount;
+
+                ctx.strokeStyle = '#1E2329';
+                ctx.lineWidth = 1;
+                ctx.fillStyle = '#848E9C';
+                ctx.font = '9px monospace';;
+
+                // Draw horizontal grid lines
+                for (let i = 0; i <= gridCount; i++) {
+                    const price = priceRange.min + step * i;
+                    const y = this.priceToY(price, priceRange);
+
+                    ctx.beginPath();
+                    ctx.moveTo(this.padding.left, y);
+                    ctx.lineTo(this.width - this.padding.right, y);
+                    ctx.stroke();
+
+                    // 价格标签显示在右侧
+                    ctx.textAlign = 'left';
+                    ctx.fillText(this.formatPrice(price), this.width - 48, y + 3);
+                }
+                
+                // Draw vertical grid lines - 固定间隔，基于屏幕宽度
+                const chartWidth = this.width - this.padding.left - this.padding.right;
+                const verticalGridCount = 6; // 固定6条竖线
+                const gridSpacing = chartWidth / verticalGridCount;
+                
+                for (let i = 0; i <= verticalGridCount; i++) {
+                    const x = this.padding.left + i * gridSpacing;
+                    ctx.beginPath();
+                    ctx.moveTo(x, this.klineY + this.padding.top);
+                    ctx.lineTo(x, this.klineY + this.klineHeight - this.padding.bottom);
+                    ctx.stroke();
+                }
+            }
+
+            drawXAxisDates(visibleData, fractionalOffset) {
+                if (visibleData.length < 2) return;
+                
+                const ctx = this.ctx;
+                ctx.fillStyle = '#848E9C';
+                ctx.font = '7px monospace';
+                
+                // 紧贴K线图表底部：图表底部位置 + 3px间距
+                const y = this.klineHeight - this.padding.bottom + 7;
+                
+                const leftDate = this.formatDate(visibleData[0].timestamp);
+                const leftX = this.padding.left + this.candleWidth / 2 - fractionalOffset * (this.candleWidth + this.candleSpacing);
+                ctx.textAlign = 'left';
+                ctx.fillText(leftDate, Math.max(5, leftX - 35), y);
+                
+                const rightDate = this.formatDate(visibleData[visibleData.length - 1].timestamp);
+                const rightX = this.padding.left + (visibleData.length - 1 - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                ctx.textAlign = 'right';
+                ctx.fillText(rightDate, Math.min(this.width - 5, rightX + 35), y);
+                
+                const midIndex = Math.floor(visibleData.length / 2);
+                const midDate = this.formatDate(visibleData[midIndex].timestamp);
+                const midX = this.padding.left + (midIndex - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                ctx.textAlign = 'center';
+                ctx.fillText(midDate, midX, y);
+            }
+
+            formatDate(timestamp) {
+                const date = new Date(timestamp);
+                const year = date.getFullYear();
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                const hours = String(date.getHours()).padStart(2, '0');
+                const minutes = String(date.getMinutes()).padStart(2, '0');
+                return `${year}-${month}-${day} ${hours}:${minutes}`;
+            }
+
+            drawXAxisDatesForIndicator(visibleData, fractionalOffset, y) {
+                if (visibleData.length < 2) return;
+                
+                const ctx = this.ctx;
+                ctx.fillStyle = '#848E9C';
+                ctx.font = '7px monospace'; // 缩小字体
+                
+                const leftDate = this.formatDate(visibleData[0].timestamp);
+                const leftX = this.padding.left + this.candleWidth / 2 - fractionalOffset * (this.candleWidth + this.candleSpacing);
+                ctx.textAlign = 'left'; // 左对齐
+                ctx.fillText(leftDate, Math.max(5, leftX - 35), y);
+                
+                const rightDate = this.formatDate(visibleData[visibleData.length - 1].timestamp);
+                const rightX = this.padding.left + (visibleData.length - 1 - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                ctx.textAlign = 'right'; // 右对齐
+                ctx.fillText(rightDate, Math.min(this.width - 5, rightX + 35), y);
+                
+                const midIndex = Math.floor(visibleData.length / 2);
+                const midDate = this.formatDate(visibleData[midIndex].timestamp);
+                const midX = this.padding.left + (midIndex - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                ctx.textAlign = 'center';
+                ctx.fillText(midDate, midX, y);
+            }
+
+            drawVolumeChart(visibleData, startIndex, offsetY) {
+                const ctx = this.ctx;
+                const fractionalOffset = this.offsetX - Math.floor(this.offsetX);
+                
+                const volumes = visibleData.map(d => d.volume);
+                const maxVolume = Math.max(...volumes);
+                const chartHeight = this.indicatorHeight - 20;
+                
+                ctx.fillStyle = '#0B0E11';
+                ctx.fillRect(0, offsetY, this.width, this.indicatorHeight);
+                
+                visibleData.forEach((item, i) => {
+                    const x = this.padding.left + (i - fractionalOffset) * (this.candleWidth + this.candleSpacing);
+                    const height = (item.volume / maxVolume) * chartHeight;
+                    const y = offsetY + this.indicatorHeight - height - 5;
+                    const isRising = item.close >= item.open;
+                    ctx.fillStyle = isRising ? 'rgba(14, 203, 129, 0.5)' : 'rgba(246, 70, 93, 0.5)';
+                    ctx.fillRect(x, y, this.candleWidth, height);
+                });
+                
+                const ma5 = this.indicators.vol.ma5;
+                const ma10 = this.indicators.vol.ma10;
+                
+                this.drawLine(ma5, startIndex, visibleData.length, fractionalOffset, maxVolume, offsetY, chartHeight, '#F0B90B', 1);
+                this.drawLine(ma10, startIndex, visibleData.length, fractionalOffset, maxVolume, offsetY, chartHeight, '#E656E6', 1);
+                
+                const currentVol = visibleData[visibleData.length - 1].volume;
+                const currentMa5 = ma5[startIndex + visibleData.length - 1];
+                const currentMa10 = ma10[startIndex + visibleData.length - 1];
+                
+                ctx.font = '9px monospace';;
+                ctx.textAlign = 'left';
+                let labelX = this.padding.left;
+                
+                ctx.fillStyle = '#848E9C';
+                ctx.fillText(`Vol ${currentVol.toFixed(2)}`, labelX, offsetY + 12);
+                labelX += 100;
+                
+                ctx.fillStyle = '#F0B90B';
+                ctx.fillText(`MA(5) ${currentMa5 ? currentMa5.toFixed(2) : '-'}`, labelX, offsetY + 12);
+                labelX += 100;
+                
+                ctx.fillStyle = '#E656E6';
+                ctx.fillText(`MA(10) ${currentMa10 ? currentMa10.toFixed(2) : '-'}`, labelX, offsetY + 12);
+                
+                // 绘制Y轴数值（右侧上下两个）
+                ctx.font = '9px monospace';
+                ctx.textAlign = 'right';
+                ctx.fillStyle = '#848E9C';
+                // 上方数值
+                ctx.fillText(maxVolume.toFixed(0), this.width - 8, offsetY + 20);
+                // 下方数值
+                ctx.fillText('0', this.width - 8, offsetY + this.indicatorHeight - 15);
+            }
+
+            drawMACDChart(visibleData, startIndex, offsetY) {
+                const ctx = this.ctx;
+                const fractionalOffset = this.offsetX - Math.floor(this.offsetX);
+                
+                const dif = this.indicators.macd.dif.slice(startIndex, startIndex + visibleData.length);
+                const dea = this.indicators.macd.dea.slice(startIndex, startIndex + visibleData.length);
+                const macd = this.indicators.macd.macd.slice(startIndex, startIndex + visibleData.length);
+                
+                const allValues = [...dif, ...dea, ...macd].filter(v => v !== null);
+                const maxValue = Math.max(...allValues, 0);
+                const minValue = Math.min(...allValues, 0);
+                const range = maxValue - minValue;
+                const chartHeight = this.indicatorHeight - 20;
+                
+                ctx.fillStyle = '#0B0E11';
+                ctx.fillRect(0, offsetY, this.width, this.indicatorHeight);
+                
+                const zeroY = offsetY + 15 + chartHeight * (maxValue / range);
+                ctx.strokeStyle = '#1E2329';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(this.padding.left, zeroY);
+                ctx.lineTo(this.width - this.padding.right, zeroY);
+                ctx.stroke();
+                
+                macd.forEach((value, i) => {
+                    if (value === null) return;
+                    const x = this.padding.left + (i - fractionalOffset) * (this.candleWidth + this.candleSpacing);
+                    const height = Math.abs(value / range) * chartHeight;
+                    const y = value >= 0 ? zeroY - height : zeroY;
+                    ctx.fillStyle = value >= 0 ? 'rgba(14, 203, 129, 0.5)' : 'rgba(246, 70, 93, 0.5)';
+                    ctx.fillRect(x, y, this.candleWidth, height);
+                });
+                
+                this.drawMACDLine(dif, fractionalOffset, minValue, range, offsetY, chartHeight, '#F0B90B', 1);
+                this.drawMACDLine(dea, fractionalOffset, minValue, range, offsetY, chartHeight, '#E656E6', 1);
+                
+                const currentDif = dif[dif.length - 1];
+                const currentDea = dea[dea.length - 1];
+                const currentMacd = macd[macd.length - 1];
+                
+                ctx.font = '9px monospace';;
+                ctx.textAlign = 'left';
+                let labelX = this.padding.left;
+                
+                ctx.fillStyle = '#F0B90B';
+                ctx.fillText(`DIF ${currentDif ? currentDif.toFixed(2) : '-'}`, labelX, offsetY + 12);
+                labelX += 100;
+                
+                ctx.fillStyle = '#E656E6';
+                ctx.fillText(`DEA ${currentDea ? currentDea.toFixed(2) : '-'}`, labelX, offsetY + 12);
+                labelX += 100;
+                
+                ctx.fillStyle = '#848E9C';
+                ctx.fillText(`MACD ${currentMacd ? currentMacd.toFixed(2) : '-'}`, labelX, offsetY + 12);
+                
+                // 绘制Y轴数值（右侧上下两个）
+                ctx.font = '9px monospace';
+                ctx.textAlign = 'right';
+                ctx.fillStyle = '#848E9C';
+                // 上方数值
+                ctx.fillText(maxValue.toFixed(4), this.width - 8, offsetY + 20);
+                // 下方数值
+                ctx.fillText(minValue.toFixed(4), this.width - 8, offsetY + this.indicatorHeight - 15);
+            }
+
+            drawLine(data, startIndex, count, fractionalOffset, maxValue, offsetY, chartHeight, color, lineWidth) {
+                const ctx = this.ctx;
+                ctx.strokeStyle = color;
+                ctx.lineWidth = lineWidth;
+                
+                let started = false;
+                for (let i = 0; i < count; i++) {
+                    const value = data[startIndex + i];
+                    
+                    if (value === null || value === undefined) {
+                        // If we encounter a null, finish current path and reset
+                        if (started) {
+                            ctx.stroke();
+                            started = false;
+                        }
+                        continue;
+                    }
+                    
+                    const x = this.padding.left + (i - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                    const y = offsetY + this.indicatorHeight - (value / maxValue) * chartHeight - 10;
+                    
+                    if (!started) {
+                        ctx.beginPath();
+                        ctx.moveTo(x, y);
+                        started = true;
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                
+                // Finish the last path if we have one
+                if (started) {
+                    ctx.stroke();
+                }
+            }
+
+            drawMACDLine(data, fractionalOffset, minValue, range, offsetY, chartHeight, color, lineWidth) {
+                const ctx = this.ctx;
+                ctx.strokeStyle = color;
+                ctx.lineWidth = lineWidth;
+                
+                let started = false;
+                data.forEach((value, i) => {
+                    if (value === null || value === undefined) {
+                        // If we encounter a null, finish current path and reset
+                        if (started) {
+                            ctx.stroke();
+                            started = false;
+                        }
+                        return;
+                    }
+                    
+                    const x = this.padding.left + (i - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                    const y = offsetY + 20 + chartHeight * (1 - (value - minValue) / range);
+                    
+                    if (!started) {
+                        ctx.beginPath();
+                        ctx.moveTo(x, y);
+                        started = true;
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                });
+                
+                // Finish the last path if we have one
+                if (started) {
+                    ctx.stroke();
+                }
+            }
+
+            drawCrosshair(visibleData, startIndex, priceRange) {
+                const ctx = this.ctx;
+                
+                const fractionalOffset = this.offsetX - Math.floor(this.offsetX);
+                const candleStep = (this.candleWidth + this.candleSpacing);
+                const relativeX = this.crosshairX - this.padding.left + fractionalOffset * candleStep;
+                const candleIndex = Math.floor(relativeX / candleStep);
+                
+                if (candleIndex < 0 || candleIndex >= visibleData.length) return;
+                
+                const candleData = visibleData[candleIndex];
+                const centerX = this.padding.left + (candleIndex - fractionalOffset) * candleStep + this.candleWidth / 2;
+                
+                ctx.strokeStyle = '#848E9C';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([4, 4]);
+                
+                ctx.beginPath();
+                ctx.moveTo(centerX, this.padding.top);
+                ctx.lineTo(centerX, this.height);
+                ctx.stroke();
+                
+                ctx.beginPath();
+                ctx.moveTo(this.padding.left, this.crosshairY);
+                ctx.lineTo(this.width - this.padding.right, this.crosshairY);
+                ctx.stroke();
+                
+                ctx.setLineDash([]);
+                
+                // 只在K线图范围内显示价格标签
+                if (this.crosshairY >= this.padding.top && this.crosshairY <= this.padding.top + this.klineChartHeight) {
+                    const price = priceRange.min + (1 - (this.crosshairY - this.padding.top) / this.klineChartHeight) * (priceRange.max - priceRange.min);
+                    ctx.font = '10px monospace';
+                    const priceText = this.formatPrice(price);
+                    const priceWidth = ctx.measureText(priceText).width;
+                    const boxWidth = Math.max(priceWidth + 8, 70);
+                    const boxX = this.width - boxWidth - 5;
+                    // 白色背景
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillRect(boxX, this.crosshairY - 10, boxWidth, 20);
+                    // 黑色文字
+                    ctx.fillStyle = '#000000';
+                    ctx.textAlign = 'left';
+                    ctx.fillText(priceText, boxX + 4, this.crosshairY + 4);
+                }
+                
+                const dateText = this.formatDate(candleData.timestamp);
+                ctx.font = '8px monospace'; // 缩小字体到8px
+                const dateWidth = ctx.measureText(dateText).width;
+                const boxWidth = Math.max(dateWidth + 8, 60); // 减小最小宽度
+                const dateX = centerX - boxWidth / 2;
+                // 白色背景 - 往下移动20px左右
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(dateX, this.klineHeight - 20, boxWidth, 16); // 高度也减小
+                // 黑色文字
+                ctx.fillStyle = '#000000';
+                ctx.textAlign = 'center';
+                ctx.fillText(dateText, centerX, this.klineHeight - 9);
+                
+                this.drawInfoBox(candleData, centerX);
+            }
+
+            drawMainIndicator(visibleData, startIndex, priceRange, fractionalOffset) {
+                const ctx = this.ctx;
+                const indicator = this.activeMainIndicator;
+                
+                if (!indicator) return;
+                
+                let labelX = this.padding.left;
+                ctx.font = '9px monospace';
+                ctx.textAlign = 'left';
+                
+                // 检查数据量是否充足
+                const totalCandles = this.data.length;
+                let insufficientData = false;
+                let requiredCandles = 0;
+                
+                if (indicator === 'ma') {
+                    requiredCandles = 99;
+                    insufficientData = totalCandles < requiredCandles;
+                    
+                    const ma7 = this.indicators.ma.ma7;
+                    const ma25 = this.indicators.ma.ma25;
+                    const ma99 = this.indicators.ma.ma99;
+                    
+                    this.drawPriceLine(ma7, startIndex, visibleData.length, fractionalOffset, priceRange, '#F0B90B', 1);
+                    this.drawPriceLine(ma25, startIndex, visibleData.length, fractionalOffset, priceRange, '#E656E6', 1);
+                    this.drawPriceLine(ma99, startIndex, visibleData.length, fractionalOffset, priceRange, '#2962FF', 1);
+                    
+                    const currentMa7 = ma7[startIndex + visibleData.length - 1];
+                    const currentMa25 = ma25[startIndex + visibleData.length - 1];
+                    const currentMa99 = ma99[startIndex + visibleData.length - 1];
+                    
+                    const labelY = this.padding.top + 15; // 在网格内部显示
+                    ctx.fillStyle = '#F0B90B';
+                    ctx.fillText(`MA(7) ${currentMa7 ? currentMa7.toFixed(2) : '-'}`, labelX, labelY);
+                    labelX += 100;
+                    ctx.fillStyle = '#E656E6';
+                    ctx.fillText(`MA(25) ${currentMa25 ? currentMa25.toFixed(2) : '-'}`, labelX, labelY);
+                    labelX += 100;
+                    ctx.fillStyle = '#2962FF';
+                    ctx.fillText(`MA(99) ${currentMa99 ? currentMa99.toFixed(2) : '-'}`, labelX, labelY);
+                    
+                    // 数据不足提示
+                    if (insufficientData) {
+                        labelX += 120;
+                        ctx.fillStyle = '#FF6B6B';
+                        ctx.fillText(`数据不足(${totalCandles}/${requiredCandles}根)`, labelX, labelY);
+                    }
+                    
+                } else if (indicator === 'ema') {
+                    requiredCandles = 99;
+                    insufficientData = totalCandles < requiredCandles;
+                    
+                    const ema7 = this.indicators.ema.ema7;
+                    const ema25 = this.indicators.ema.ema25;
+                    const ema99 = this.indicators.ema.ema99;
+                    
+                    this.drawPriceLine(ema7, startIndex, visibleData.length, fractionalOffset, priceRange, '#F0B90B', 1);
+                    this.drawPriceLine(ema25, startIndex, visibleData.length, fractionalOffset, priceRange, '#E656E6', 1);
+                    this.drawPriceLine(ema99, startIndex, visibleData.length, fractionalOffset, priceRange, '#2962FF', 1);
+                    
+                    const currentEma7 = ema7[startIndex + visibleData.length - 1];
+                    const currentEma25 = ema25[startIndex + visibleData.length - 1];
+                    const currentEma99 = ema99[startIndex + visibleData.length - 1];
+                    
+                    const labelY = this.padding.top + 15; // 在网格内部显示
+                    ctx.fillStyle = '#F0B90B';
+                    ctx.fillText(`EMA(7) ${currentEma7 ? currentEma7.toFixed(2) : '-'}`, labelX, labelY);
+                    labelX += 100;
+                    ctx.fillStyle = '#E656E6';
+                    ctx.fillText(`EMA(25) ${currentEma25 ? currentEma25.toFixed(2) : '-'}`, labelX, labelY);
+                    labelX += 100;
+                    ctx.fillStyle = '#2962FF';
+                    ctx.fillText(`EMA(99) ${currentEma99 ? currentEma99.toFixed(2) : '-'}`, labelX, labelY);
+                    
+                    // 数据不足提示
+                    if (insufficientData) {
+                        labelX += 120;
+                        ctx.fillStyle = '#FF6B6B';
+                        ctx.fillText(`数据不足(${totalCandles}/${requiredCandles}根)`, labelX, labelY);
+                    }
+                    
+                } else if (indicator === 'boll') {
+                    requiredCandles = 20;
+                    insufficientData = totalCandles < requiredCandles;
+                    
+                    const up = this.indicators.boll.up;
+                    const mb = this.indicators.boll.mb;
+                    const dn = this.indicators.boll.dn;
+                    
+                    this.drawPriceLine(up, startIndex, visibleData.length, fractionalOffset, priceRange, '#F0B90B', 1);
+                    this.drawPriceLine(mb, startIndex, visibleData.length, fractionalOffset, priceRange, '#E656E6', 1);
+                    this.drawPriceLine(dn, startIndex, visibleData.length, fractionalOffset, priceRange, '#2962FF', 1);
+                    
+                    const currentUp = up[startIndex + visibleData.length - 1];
+                    const currentMb = mb[startIndex + visibleData.length - 1];
+                    const currentDn = dn[startIndex + visibleData.length - 1];
+                    
+                    const labelY = this.padding.top + 15; // 在网格内部显示
+                    ctx.fillStyle = '#848E9C';
+                    ctx.fillText(`BOLL(20,2)`, labelX, labelY);
+                    labelX += 90;
+                    ctx.fillStyle = '#F0B90B';
+                    ctx.fillText(`UP ${currentUp ? currentUp.toFixed(2) : '-'}`, labelX, labelY);
+                    labelX += 100;
+                    ctx.fillStyle = '#E656E6';
+                    ctx.fillText(`MB ${currentMb ? currentMb.toFixed(2) : '-'}`, labelX, labelY);
+                    labelX += 100;
+                    ctx.fillStyle = '#2962FF';
+                    ctx.fillText(`DN ${currentDn ? currentDn.toFixed(2) : '-'}`, labelX, labelY);
+                    
+                    // 数据不足提示
+                    if (insufficientData) {
+                        labelX += 100;
+                        ctx.fillStyle = '#FF6B6B';
+                        ctx.fillText(`数据不足(${totalCandles}/${requiredCandles}根)`, labelX, labelY);
+                    }
+                    
+                } else if (indicator === 'sar') {
+                    const sar = this.indicators.sar;
+                    
+                    // 绘制SAR点
+                    for (let i = 0; i < visibleData.length; i++) {
+                        const sarData = sar[startIndex + i];
+                        if (!sarData || sarData.value === null) continue;
+                        
+                        const x = this.padding.left + (i - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                        const y = this.priceToY(sarData.value, priceRange);
+                        
+                        ctx.fillStyle = sarData.isUptrend ? '#0ECB81' : '#F6465D';
+                        ctx.beginPath();
+                        ctx.arc(x, y, 2, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    
+                    const currentSar = sar[startIndex + visibleData.length - 1];
+                    ctx.fillStyle = '#848E9C';
+                    ctx.fillText(`SAR(0.02,0.2) ${currentSar && currentSar.value ? currentSar.value.toFixed(2) : '-'}`, labelX, 20);
+                    
+                } else if (indicator === 'avl') {
+                    const avl = this.indicators.avl;
+                    this.drawPriceLine(avl, startIndex, visibleData.length, fractionalOffset, priceRange, '#F0B90B', 1);
+                    
+                    const currentAvl = avl[startIndex + visibleData.length - 1];
+                    ctx.fillStyle = '#F0B90B';
+                    ctx.fillText(`AVL ${currentAvl ? currentAvl.toFixed(2) : '-'}`, labelX, 20);
+                    
+                } else if (indicator === 'super') {
+                    const supertrend = this.indicators.super;
+                    
+                    // 绘制SuperTrend区域填充
+                    ctx.lineWidth = 1;
+                    
+                    for (let i = 0; i < visibleData.length; i++) {
+                        const stData = supertrend[startIndex + i];
+                        if (!stData || stData.value === null) continue;
+                        
+                        const x = this.padding.left + (i - fractionalOffset) * (this.candleWidth + this.candleSpacing);
+                        const stY = this.priceToY(stData.value, priceRange);
+                        const candleData = visibleData[i];
+                        const candleHigh = this.priceToY(candleData.high, priceRange);
+                        const candleLow = this.priceToY(candleData.low, priceRange);
+                        
+                        // 根据趋势填充区域
+                        if (stData.isUptrend) {
+                            // 上升趋势：SuperTrend线到蜡烛顶部
+                            ctx.fillStyle = 'rgba(14, 203, 129, 0.15)';
+                            const topY = Math.min(stY, candleHigh);
+                            const height = Math.abs(candleHigh - stY);
+                            ctx.fillRect(x, topY, this.candleWidth, height);
+                        } else {
+                            // 下降趋势：SuperTrend线到蜡烛底部
+                            ctx.fillStyle = 'rgba(246, 70, 93, 0.15)';
+                            const height = Math.abs(candleLow - stY);
+                            ctx.fillRect(x, stY, this.candleWidth, height);
+                        }
+                    }
+                    
+                    // 绘制SuperTrend线
+                    ctx.lineWidth = 1.5;
+                    let lastX = null, lastY = null, lastTrend = null;
+                    
+                    for (let i = 0; i < visibleData.length; i++) {
+                        const stData = supertrend[startIndex + i];
+                        if (!stData || stData.value === null) continue;
+                        
+                        const x = this.padding.left + (i - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                        const y = this.priceToY(stData.value, priceRange);
+                        
+                        if (lastX !== null && lastTrend === stData.isUptrend) {
+                            ctx.strokeStyle = stData.isUptrend ? '#0ECB81' : '#F6465D';
+                            ctx.beginPath();
+                            ctx.moveTo(lastX, lastY);
+                            ctx.lineTo(x, y);
+                            ctx.stroke();
+                        }
+                        
+                        lastX = x;
+                        lastY = y;
+                        lastTrend = stData.isUptrend;
+                    }
+                    
+                    const currentSuper = supertrend[startIndex + visibleData.length - 1];
+                    const stColor = currentSuper && currentSuper.isUptrend ? '#0ECB81' : '#F6465D';
+                    ctx.fillStyle = stColor;
+                    ctx.fillText(`SUPERTREND(10,3) ${currentSuper && currentSuper.value ? currentSuper.value.toFixed(2) : '-'}`, labelX, 20);
+                }
+            }
+
+            drawPriceLine(data, startIndex, count, fractionalOffset, priceRange, color, lineWidth) {
+                const ctx = this.ctx;
+                
+                // 保存当前上下文并设置裁剪区域
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(this.padding.left, this.padding.top, this.klineChartWidth, this.klineChartHeight);
+                ctx.clip();
+                
+                ctx.strokeStyle = color;
+                ctx.lineWidth = lineWidth;
+                
+                let started = false;
+                for (let i = 0; i < count; i++) {
+                    const value = data[startIndex + i];
+                    
+                    if (value === null || value === undefined) {
+                        // If we encounter a null, finish current path and reset
+                        if (started) {
+                            ctx.stroke();
+                            started = false;
+                        }
+                        continue;
+                    }
+                    
+                    const x = this.padding.left + (i - fractionalOffset) * (this.candleWidth + this.candleSpacing) + this.candleWidth / 2;
+                    const y = this.priceToY(value, priceRange);
+                    
+                    if (!started) {
+                        ctx.beginPath();
+                        ctx.moveTo(x, y);
+                        started = true;
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                
+                // Finish the last path if we have one
+                if (started) {
+                    ctx.stroke();
+                }
+                
+                // 恢复上下文
+                ctx.restore();
+            }
+
+            drawInfoBox(data, crosshairX) {
+                const ctx = this.ctx;
+                const isLeft = crosshairX > this.width / 2;
+                
+                const change = data.close - data.open;
+                const changePct = (change / data.open) * 100;
+                const amplitude = ((data.high - data.low) / data.open) * 100;
+                
+                const changeColor = change >= 0 ? '#0ECB81' : '#F6465D';
+                
+                ctx.font = '9px monospace';;
+                const lineHeight = 14;
+                const padding = 6;
+                
+                // 计算每行的文本和颜色
+                const lines = [
+                    { text: this.formatDate(data.timestamp), color: '#FFFFFF' },
+                    { text: `开: ${this.formatPrice(data.open)}`, color: '#FFFFFF' },
+                    { text: `高: ${this.formatPrice(data.high)}`, color: '#FFFFFF' },
+                    { text: `低: ${this.formatPrice(data.low)}`, color: '#FFFFFF' },
+                    { text: `收: ${this.formatPrice(data.close)}`, color: '#FFFFFF' },
+                    { text: `涨跌: ${change >= 0 ? '+' : ''}${this.formatPrice(change)}`, color: changeColor },
+                    { text: `幅: ${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%`, color: changeColor },
+                    { text: `振幅: ${amplitude.toFixed(2)}%`, color: '#FFFFFF' },
+                    { text: `量: ${data.volume.toFixed(2)}`, color: '#FFFFFF' }
+                ];
+                
+                const maxWidth = Math.max(...lines.map(line => ctx.measureText(line.text).width));
+                const boxWidth = maxWidth + padding * 2;
+                const boxHeight = lines.length * lineHeight + padding * 2;
+                
+                const boxX = isLeft ? this.padding.left + 10 : this.width - this.padding.right - boxWidth - 10;
+                const boxY = this.padding.top + 10;
+                
+                // 半透明背景
+                ctx.fillStyle = 'rgba(30, 35, 41, 0.9)';
+                ctx.fillRect(boxX, boxY, boxWidth, boxHeight);
+                
+                // 绘制文本（不同颜色）
+                ctx.textAlign = 'left';
+                lines.forEach((line, i) => {
+                    ctx.fillStyle = line.color;
+                    ctx.fillText(line.text, boxX + padding, boxY + padding + (i + 1) * lineHeight - 2);
+                });
+            }
+        }
+
+        let chart = null;
+
+        const handleMessage = (event) => {
+            try {
+                const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+                if (data.type === 'KLINE_DATA') {
+                    // 全量数据更新
+                    if (!chart) {
+                        chart = new KlineChart();
+                    }
+                    chart.setData(data.data, data.interval || '1h');
+                } else if (data.type === 'UPDATE_LATEST_CANDLE') {
+                    // 增量更新最新蜡烛
+                    if (chart && data.data && data.data.length > 0) {
+                        chart.updateLatestCandle(data.data[0]);
+                    }
+                } else if (data.type === 'UPDATE_LOADING_TEXT') {
+                    document.getElementById('loading').innerText = data.text || '';
+                }
+            } catch (e) {
+                console.error('Error:', e);
+            }
+        };
+
+        window.addEventListener('message', handleMessage);
+        document.addEventListener('message', handleMessage);
+
+        document.addEventListener('DOMContentLoaded', () => {
+            chart = new KlineChart();
+            
+            document.querySelectorAll('.timeBtn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.timeBtn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    const interval = btn.dataset.interval;
+                    
+                    if (chart) {
+                        chart.changeInterval(interval);
+                    }
+                    
+                    // 向 React Native 发送 interval 变更消息
+                    if (window.ReactNativeWebView) {
+                        document.getElementById('loading').innerText = "加载中...";
+                        window.ReactNativeWebView.postMessage(JSON.stringify({
+                            type: 'CHANGE_INTERVAL',
+                            interval: interval
+                        }));
+                        console.log('向RN发送interval变更:', interval);
+                    }
+                });
+            });
+            
+            document.querySelectorAll('.indicatorBtn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const type = btn.dataset.type;
+                    const indicator = btn.dataset.indicator;
+                    
+                    if (type === 'main') {
+                        // 主图指标单选（可以取消）
+                        const wasActive = btn.classList.contains('active');
+                        document.querySelectorAll('.indicatorBtn[data-type="main"]').forEach(b => b.classList.remove('active'));
+                        
+                        if (!wasActive) {
+                            // 之前未选中，现在选中
+                            btn.classList.add('active');
+                        }
+                    } else {
+                        // 副图指标多选
+                        btn.classList.toggle('active');
+                    }
+                    
+                    if (chart) {
+                        chart.toggleIndicator(indicator, type);
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>
