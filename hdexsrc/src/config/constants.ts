@@ -167,7 +167,7 @@ export const NETWORK_CONFIGS: Record<NetworkType, NetworkConfig> = {
 // 测试网渠道
 export const CHANNEL_HDEXTEST: ChannelConfig = {
   type: 'hdextest',
-  appName: 'Hdex测试网',
+  appName: 'Defishares测试网',
   channelId: 1001,
   isAdminMode: false,
   onChainSettingsAccount: '1.2.185991',// 链上 APP 配置账户
@@ -177,7 +177,7 @@ export const CHANNEL_HDEXTEST: ChannelConfig = {
 // 测试网管理员渠道
 export const CHANNEL_HDEXTESTADMIN: ChannelConfig = {
   type: 'hdextestadmin',
-  appName: 'Hdex管理(测)',
+  appName: 'Defishares管理(测)',
   channelId: 1001,
   isAdminMode: true,
   onChainSettingsAccount: '1.2.185991',// 链上 APP 配置账户
@@ -187,7 +187,7 @@ export const CHANNEL_HDEXTESTADMIN: ChannelConfig = {
 // 主网渠道
 export const CHANNEL_HDEXMAIN: ChannelConfig = {
   type: 'hdexmain',
-  appName: 'HDEX',
+  appName: 'Defishares',
   channelId: 1000,
   isAdminMode: false,
   onChainSettingsAccount: '',// 可设置配置数据
@@ -197,7 +197,7 @@ export const CHANNEL_HDEXMAIN: ChannelConfig = {
 // 主网管理员渠道
 export const CHANNEL_HDEXMAINADMIN: ChannelConfig = {
   type: 'hdexmainadmin',
-  appName: 'Hdex管理(主)',
+  appName: 'Defishares管理(主)',
   channelId: 1000,
   isAdminMode: true,
   onChainSettingsAccount: '',// 可设置配置数据

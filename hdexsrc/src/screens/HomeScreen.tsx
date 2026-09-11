@@ -50,7 +50,6 @@ const quickActions = [
   { id: 'transfer', icon: 'arrow-up', label: '转账' },
   { id: 'receive', icon: 'arrow-down', label: '收款' },
   { id: 'buy', icon: 'credit-card-outline', label: '买币' },
-  { id: 'checkin', icon: 'calendar-check-outline', label: '签到' },
   { id: 'more', icon: 'dots-horizontal', label: '更多' },
 ];
 
@@ -203,9 +202,6 @@ const HomeScreen: React.FC = () => {
       case 'transfer':
         navigation.navigate('Transfer', {});
         break;
-      case 'checkin':
-        navigation.navigate('DailyCheckin');
-        break;
       case 'receive':
       case 'buy':
         Toast.show('敬请期待');
@@ -215,13 +211,13 @@ const HomeScreen: React.FC = () => {
         MoreFunctionsSheet.show({
           items: [
             {
-              key: 'invitation',
-              label: '我的邀请',
-              icon: 'account-group-outline',
+              key: 'lending',
+              label: '借贷',
+              icon: 'bank-outline',
               iconColor: '#00D094',
               iconBgColor: 'rgba(0, 208, 148, 0.15)',
               onPress: () => {
-                navigation.navigate('Invitation');
+                navigation.navigate('Lending');
               },
             },
             {

@@ -114,6 +114,7 @@ export const UnlockModalContainer: React.FC = () => {
   const [pinCode, setPinCode] = useState('');
   const [showPinCode, setShowPinCode] = useState(false);
   const [isPinLoading, setIsPinLoading] = useState(false);
+  const [, setBiometricFailures] = useState(0);
 
   // 动画值
   const slideAnim = useRef(new Animated.Value(MODAL_HEIGHT)).current;
@@ -131,6 +132,7 @@ export const UnlockModalContainer: React.FC = () => {
     setShowPinCode(false);
     setIsBiometricLoading(false);
     setIsPinLoading(false);
+    setBiometricFailures(0);
     setBiometricsEnabled(false); // 重置生物认证状态
     setIsInitialized(false); // 重置初始化状态
 
@@ -186,6 +188,7 @@ export const UnlockModalContainer: React.FC = () => {
       // 检查账号是否启用了生物认证
       const enabled = await secureStorageService.isBiometricsEnabled(accountId);
       setBiometricsEnabled(enabled);
+      setShowPinCode(!(enabled && type !== 'None'));
       setIsInitialized(true);
 
       console.log(`[UnlockModal] 初始化完成 - 设备支持: ${type}, 账号已启用: ${enabled}`);
@@ -218,11 +221,21 @@ export const UnlockModalContainer: React.FC = () => {
       if (result.success && result.keys) {
         handleUnlockSuccess(result.keys);
       } else {
-        setErrorMessage(result.error || '认证失败，请使用PIN码');
+        setBiometricFailures(previous => {
+          const next = previous + 1;
+          if (next >= 3) setShowPinCode(true);
+          return next;
+        });
+        setErrorMessage(result.error || '指纹验证失败');
       }
     } catch (error) {
       console.error('[UnlockModal] 生物认证失败:', error);
-      setErrorMessage('认证失败，请使用PIN码');
+      setBiometricFailures(previous => {
+        const next = previous + 1;
+        if (next >= 3) setShowPinCode(true);
+        return next;
+      });
+      setErrorMessage('指纹验证失败');
     } finally {
       setIsBiometricLoading(false);
     }
@@ -448,8 +461,8 @@ export const UnlockModalContainer: React.FC = () => {
             </View>
           )}
 
-          {/* PIN 码输入区域 */}
-          <Animated.View
+          {/* PIN 码输入区域：启用生物认证时，连续失败三次后显示 */}
+          {showPinCode && <Animated.View
             style={[
               styles.pinSection,
               { transform: [{ translateX: shakeAnim }] },
@@ -495,7 +508,7 @@ export const UnlockModalContainer: React.FC = () => {
                 <Text style={styles.unlockButtonText}>确认解锁</Text>
               )}
             </TouchableOpacity>
-          </Animated.View>
+          </Animated.View>}
         </Animated.View>
       </KeyboardAvoidingView>
     </Modal>
@@ -678,4 +691,3 @@ const styles = StyleSheet.create({
 });
 
 export default UnlockModal;
-

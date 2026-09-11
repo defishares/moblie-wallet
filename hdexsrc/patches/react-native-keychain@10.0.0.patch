@@ -1,0 +1,16 @@
+diff --git a/android/src/main/java/com/oblador/keychain/KeychainModule.kt b/android/src/main/java/com/oblador/keychain/KeychainModule.kt
+index 722a5ed990c2a1baa15546351d36928ec2b6d268..ad4dbc1f50c201778a510632f71b5ceca8761371 100644
+--- a/android/src/main/java/com/oblador/keychain/KeychainModule.kt
++++ b/android/src/main/java/com/oblador/keychain/KeychainModule.kt
+@@ -766,6 +766,11 @@ class KeychainModule(reactContext: ReactApplicationContext) :
+         usePasscode ->
+           BiometricManager.Authenticators.DEVICE_CREDENTIAL
+ 
++        // Keystore authentication requires a strong biometric. The prompt default
++        // permits weak face unlock, which cannot authorize the key on some devices.
++        useBiometry ->
++          BiometricManager.Authenticators.BIOMETRIC_STRONG
++
+         else ->
+           null
+       }

@@ -1766,6 +1766,74 @@ class ChainServiceManager {
   // ============================================================
 
   /**
+   * 创建/调整抵押借贷仓位。
+   *
+   * DefiShares 借贷沿用 Graphene 的 call_order_update 操作：
+   * - delta_collateral 为正数表示增加抵押，负数表示取回抵押；
+   * - delta_debt 为正数表示借款，负数表示还款；
+   * - 本应用层固定只允许 DFS 作为抵押资产，借款资产由调用方选择。
+   */
+  public async updateCallOrder(params: {
+    accountId: string;
+    collateralAssetId: string;
+    collateralDelta: number | string;
+    debtAssetId: string;
+    debtDelta: number | string;
+    feeAssetId?: string;
+  }, privateKeyWif: string): Promise<any> {
+    await this.ensureConnected();
+
+    const {
+      accountId,
+      collateralAssetId,
+      collateralDelta,
+      debtAssetId,
+      debtDelta,
+      feeAssetId = '1.3.0',
+    } = params;
+
+    if (String(collateralDelta) === '0' && String(debtDelta) === '0') {
+      throw new Error('抵押或借款数量不能同时为 0');
+    }
+
+    // 在服务层再次校验抵押资产，避免绕过移动端 UI 传入其他资产。
+    const collateralAsset = (await this.getAssets([collateralAssetId]))[0];
+    if (!collateralAsset || collateralAsset.symbol !== 'DFS') {
+      throw new Error('抵押资产必须为 DFS');
+    }
+    if (debtAssetId === collateralAssetId) {
+      throw new Error('借款资产不能与抵押资产相同');
+    }
+
+    const tr = new TransactionBuilder();
+    tr.add_type_operation('call_order_update', {
+      fee: {
+        amount: 0,
+        asset_id: feeAssetId,
+      },
+      funding_account: accountId,
+      delta_collateral: {
+        amount: String(collateralDelta),
+        asset_id: collateralAssetId,
+      },
+      delta_debt: {
+        amount: String(debtDelta),
+        asset_id: debtAssetId,
+      },
+      extensions: [],
+    });
+
+    await tr.set_required_fees();
+
+    const pKey = PrivateKey.fromWif(privateKeyWif);
+    tr.add_signer(pKey, pKey.toPublicKey().toPublicKeyString());
+
+    const result = await tr.broadcast();
+    console.log('[ChainService] 抵押借贷仓位更新成功:', result);
+    return result;
+  }
+
+  /**
    * 创建限价单
    * 
    * @param params 限价单参数

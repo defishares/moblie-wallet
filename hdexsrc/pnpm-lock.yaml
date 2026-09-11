@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  react-native-keychain@10.0.0: 9a810ff4980a27bb2858fadd36b28044209d811d92968a45d02ba63b1a75ee6b
+
 importers:
 
   .:
@@ -61,7 +64,7 @@ importers:
         version: 2.0.0(react-native@0.83.0(@babel/core@7.29.7)(@react-native-community/cli@20.0.0(typescript@5.9.3))(@react-native/metro-config@0.83.0(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.0))
       react-native-keychain:
         specifier: ^10.0.0
-        version: 10.0.0
+        version: 10.0.0(patch_hash=9a810ff4980a27bb2858fadd36b28044209d811d92968a45d02ba63b1a75ee6b)
       react-native-mmkv:
         specifier: 4.1.0
         version: 4.1.0(react-native-nitro-modules@0.32.0(react-native@0.83.0(@babel/core@7.29.7)(@react-native-community/cli@20.0.0(typescript@5.9.3))(@react-native/metro-config@0.83.0(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.0))(react@19.2.0))(react-native@0.83.0(@babel/core@7.29.7)(@react-native-community/cli@20.0.0(typescript@5.9.3))(@react-native/metro-config@0.83.0(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.0))(react@19.2.0)
@@ -8211,7 +8214,7 @@ snapshots:
       fast-base64-decode: 1.0.0
       react-native: 0.83.0(@babel/core@7.29.7)(@react-native-community/cli@20.0.0(typescript@5.9.3))(@react-native/metro-config@0.83.0(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.0)
 
-  react-native-keychain@10.0.0: {}
+  react-native-keychain@10.0.0(patch_hash=9a810ff4980a27bb2858fadd36b28044209d811d92968a45d02ba63b1a75ee6b): {}
 
   react-native-mmkv@4.1.0(react-native-nitro-modules@0.32.0(react-native@0.83.0(@babel/core@7.29.7)(@react-native-community/cli@20.0.0(typescript@5.9.3))(@react-native/metro-config@0.83.0(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.0))(react@19.2.0))(react-native@0.83.0(@babel/core@7.29.7)(@react-native-community/cli@20.0.0(typescript@5.9.3))(@react-native/metro-config@0.83.0(@babel/core@7.29.7))(@types/react@19.2.18)(react@19.2.0))(react@19.2.0):
     dependencies:

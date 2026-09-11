@@ -6,13 +6,13 @@
 import { useCallback, useState } from 'react';
 import { useAccountStore } from '../store/useAccountStore';
 import { secureStorageService } from '../services/secure_storage_service';
-import { unlockModalManager } from '../components';
+import { unlockModalManager, type UnlockedKeys } from '../components';
 
 interface UseUnlockOptions {
   /**
    * 解锁成功后的回调
    */
-  onSuccess?: (privateKey: string) => void;
+  onSuccess?: (keys: UnlockedKeys) => void;
   /**
    * 解锁取消的回调
    */
@@ -44,9 +44,9 @@ interface UseUnlockResult {
  * @example
  * ```tsx
  * const { requestUnlock, quickUnlock } = useUnlock({
- *   onSuccess: (privateKey) => {
- *     // 使用私钥进行交易签名等操作
- *     signTransaction(privateKey);
+ *   onSuccess: (keys) => {
+ *     // 使用 active 私钥进行交易签名等操作
+ *     signTransaction(keys.active);
  *   },
  *   onCancel: () => {
  *     console.log('用户取消了解锁');
@@ -83,8 +83,8 @@ export const useUnlock = (options: UseUnlockOptions = {}): UseUnlockResult => {
     unlockModalManager.show({
       accountId: currentAccount.id,
       accountName: currentAccount.name,
-      onSuccess: (privateKey: string) => {
-        options.onSuccess?.(privateKey);
+      onSuccess: (keys: UnlockedKeys) => {
+        options.onSuccess?.(keys);
       },
       onCancel: options.onCancel,
     });
@@ -116,7 +116,7 @@ export const useUnlock = (options: UseUnlockOptions = {}): UseUnlockResult => {
 
       if (result.success && result.privateKey) {
         if (options.onSuccess) {
-          options.onSuccess(result.privateKey);
+          options.onSuccess({ active: result.privateKey });
         }
         return result.privateKey;
       }
@@ -147,4 +147,3 @@ export const useUnlock = (options: UseUnlockOptions = {}): UseUnlockResult => {
 };
 
 export default useUnlock;
-

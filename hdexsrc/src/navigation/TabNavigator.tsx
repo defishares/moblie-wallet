@@ -1,6 +1,6 @@
 /**
  * 底部 Tab 导航器
- * 包含 5 个 Tab: 首页、市场、交易、预测、资产
+ * 包含 5 个 Tab: 首页、市场、交易、借贷、资产
  */
 
 import React from 'react';
@@ -13,7 +13,7 @@ import {
   HomeScreen,
   MarketScreen,
   TradeScreen,
-  PredictScreen,
+  LendingScreen,
   AssetsScreen,
 } from '../screens';
 import type { MainTabParamList } from '../types';
@@ -46,10 +46,10 @@ const tabConfig = [
   },
   {
     name: 'Predict' as const,
-    component: PredictScreen,
-    label: '预测',
-    icon: 'chart-timeline-variant',
-    iconActive: 'chart-timeline-variant',
+    component: LendingScreen,
+    label: '借贷',
+    icon: 'bank-outline',
+    iconActive: 'bank',
   },
   {
     name: 'Assets' as const,
@@ -110,4 +110,3 @@ const styles = StyleSheet.create({
 });
 
 export default TabNavigator;
-

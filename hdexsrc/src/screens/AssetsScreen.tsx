@@ -40,7 +40,7 @@ const quickActions = [
   { id: 'deposit', icon: 'arrow-down', label: '充值' },
   { id: 'withdraw', icon: 'arrow-up', label: '提现' },
   { id: 'transfer', icon: 'swap-horizontal', label: '转账' },
-  { id: 'finance', icon: 'file-document-outline', label: '理财' },
+  { id: 'lending', icon: 'bank-outline', label: '借贷' },
 ];
 
 const AssetsScreen: React.FC = () => {
@@ -77,8 +77,10 @@ const AssetsScreen: React.FC = () => {
         break;
       case 'deposit':
       case 'withdraw':
-      case 'finance':
         Toast.show('敬请期待');
+        break;
+      case 'lending':
+        navigation.navigate('Lending');
         break;
     }
   };

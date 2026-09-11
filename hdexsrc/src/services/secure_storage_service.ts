@@ -280,6 +280,39 @@ const STORAGE_KEYS = {
 // 私钥类型
 export type KeyType = 'active' | 'memo' | 'owner' | string;
 
+export interface BiometricSetupResult {
+  success: boolean;
+  error?: string;
+}
+
+// Return only known error categories/codes, never native payloads that may contain secrets.
+export function biometricSetupError(error: unknown): string {
+  const native = error as { code?: unknown; message?: unknown } | null;
+  const message = typeof native?.message === 'string' ? native.message : '';
+  const number = message.match(/\bcode:\s*(\d+)\b/i)?.[1];
+  if (['5', '10', '13'].includes(number || '') || /cancel/i.test(message)) {
+    return '已取消系统指纹验证，请重新开启并完成验证';
+  }
+  if (['7', '9'].includes(number || '') || /lockout/i.test(message)) {
+    return '系统已暂时锁定生物认证，请先用手机锁屏密码解锁，稍后重试';
+  }
+  if (number === '11' || /not enrolled/i.test(message)) {
+    return '请先在手机系统设置中录入指纹，再回来开启';
+  }
+  if (number === '14') return '请先设置手机锁屏密码和指纹';
+  if (number === '3') return '系统指纹验证超时，请重试';
+  if (number === '1' || number === '12') return '手机生物认证当前不可用，请检查系统指纹设置';
+  if (/KeyPermanentlyInvalidated|key.*invalidated/i.test(message)) {
+    return '系统指纹凭据已失效，请使用 PIN 解锁后重新设置生物认证';
+  }
+  if (/UserNotAuthenticated|not authenticated/i.test(message)) {
+    return '系统验证未能授权安全存储，请先用手机锁屏密码解锁，再使用指纹重试';
+  }
+  const code = typeof native?.code === 'string' && /^[A-Z_0-9]{1,40}$/.test(native.code)
+    ? native.code : 'BIOMETRIC_SETUP_FAILED';
+  return `启用生物认证失败（${code}${number ? ` / ${number}` : ''}），请提供此错误码及手机型号`;
+}
+
 /**
  * 安全存储的账号数据结构
  */
@@ -768,11 +801,18 @@ class SecureStorageService {
     accountId: string,
     keys: { [key in KeyType]?: string } | string
   ): Promise<boolean> {
+    return (await this.enableBiometricStorageWithResult(accountId, keys)).success;
+  }
+
+  async enableBiometricStorageWithResult(
+    accountId: string,
+    keys: { [key in KeyType]?: string } | string
+  ): Promise<BiometricSetupResult> {
     try {
       const biometricType = await this.getSupportedBiometricType();
       if (biometricType === 'None') {
         console.warn('[SecureStorage] 设备不支持生物认证');
-        return false;
+        return { success: false, error: '手机未提供可用的生物认证，请先在系统设置中录入指纹' };
       }
 
       // 兼容旧的单私钥参数
@@ -787,20 +827,28 @@ class SecureStorageService {
           service: STORAGE_KEYS.BIOMETRIC_KEY(accountId),
           accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_CURRENT_SET,
           accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+          authenticationPrompt: {
+            title: '启用生物认证',
+            subtitle: `请使用${this.getBiometricDisplayName(biometricType)}验证`,
+            description: '验证后将为此钱包启用生物认证解锁',
+            cancel: '取消',
+          },
         }
       );
 
       if (result !== false) {
         // 保存配置：已启用生物认证
-        await this.saveSecurityConfig(accountId, { biometricsEnabled: true });
+        const saved = await this.saveSecurityConfig(accountId, { biometricsEnabled: true });
+        if (!saved) return { success: false, error: '指纹凭据已保存，但启用配置保存失败，请重试' };
         console.log(`[SecureStorage] 已启用生物认证 (账号: ${accountId}, 私钥数: ${Object.keys(keysToStore).length})`);
-        return true;
+        return { success: true };
       }
 
-      return false;
+      return { success: false, error: '系统未保存指纹凭据，请重新开启并完成系统验证' };
     } catch (error) {
-      console.error('[SecureStorage] 启用生物认证失败:', error);
-      return false;
+      const message = biometricSetupError(error);
+      console.warn('[SecureStorage]', message);
+      return { success: false, error: message };
     }
   }
 
@@ -846,6 +894,7 @@ class SecureStorageService {
       // 使用生物认证读取
       const credentials = await Keychain.getGenericPassword({
         service: STORAGE_KEYS.BIOMETRIC_KEY(accountId),
+        accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_CURRENT_SET,
         authenticationPrompt: {
           title: '验证身份',
           subtitle: `使用${biometricName}解锁钱包`,
@@ -914,7 +963,7 @@ class SecureStorageService {
     config: { biometricsEnabled: boolean }
   ): Promise<boolean> {
     try {
-      await Keychain.setGenericPassword(
+      const stored = await Keychain.setGenericPassword(
         accountId,
         JSON.stringify(config),
         {
@@ -922,7 +971,7 @@ class SecureStorageService {
           accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
         }
       );
-      return true;
+      return stored !== false;
     } catch (error) {
       console.error('[SecureStorage] 保存安全配置失败:', error);
       return false;
@@ -1093,7 +1142,7 @@ class SecureStorageService {
         service: STORAGE_KEYS.SECURE_DATA(accountId),
       });
       return credentials !== false;
-    } catch (error) {
+    } catch {
       return false;
     }
   }

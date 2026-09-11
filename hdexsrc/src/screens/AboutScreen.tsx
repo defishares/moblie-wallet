@@ -11,7 +11,7 @@ import {
   StatusBar,
   Linking,
   ScrollView,
-  Platform,
+  Image,
 } from 'react-native';
 import { Text } from '@rneui/themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -65,16 +65,20 @@ const AboutScreen: React.FC = () => {
         <View style={styles.logoSection}>
           <View style={styles.logoContainer}>
             <View style={styles.logoInner}>
-              <Text style={styles.logoText}>H</Text>
+              <Image
+                source={require('../assets/defishares-icon.png')}
+                style={styles.logoImage}
+                resizeMode="cover"
+              />
             </View>
           </View>
-          <Text style={styles.appName}>Hdex v{APP_VERSION}</Text>
+          <Text style={styles.appName}>Defishares v{APP_VERSION}</Text>
         </View>
 
         {/* 产品介绍 */}
         <View style={styles.descriptionSection}>
           <Text style={styles.descriptionText}>
-            Hdex 是一款安全、高效的去中心化交易平台。基于石墨烯区块链技术打造，为您提供媲美中心化交易所的流畅体验，同时确保资产完全由您掌控。
+            Defishares 是一款安全、高效的去中心化交易平台。基于石墨烯区块链技术打造，为您提供媲美中心化交易所的流畅体验，同时确保资产完全由您掌控。
           </Text>
         </View>
 
@@ -110,7 +114,7 @@ const AboutScreen: React.FC = () => {
               {__DEV__ ? 'Debug' : 'Release'}
             </Text>
           </View>
-          <Text style={styles.footerVersion}>Hdex v{APP_VERSION}</Text>
+          <Text style={styles.footerVersion}>Defishares v{APP_VERSION}</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -174,14 +178,17 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   logoInner: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  logoText: {
-    fontSize: 42,
-    fontWeight: '700',
-    color: '#D4A84B',
-    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'sans-serif-medium',
+  logoImage: {
+    width: '100%',
+    height: '100%',
   },
   appName: {
     fontSize: 16,
@@ -256,4 +263,3 @@ const styles = StyleSheet.create({
 });
 
 export default AboutScreen;
-

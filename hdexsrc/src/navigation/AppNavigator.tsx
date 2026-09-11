@@ -20,6 +20,7 @@ import {
   WebViewScreen,
   InvitationScreen,
   DailyCheckinScreen,
+  LendingScreen,
 } from '../screens';
 import TabNavigator from './TabNavigator';
 import type { RootStackParamList } from '../types';
@@ -178,6 +179,16 @@ const AppNavigator: React.FC = () => {
         <Stack.Screen
           name="DailyCheckin"
           component={DailyCheckinScreen}
+          options={{
+            gestureEnabled: true,
+            ...fastSlideAnimation,
+          }}
+        />
+
+        {/* DFS 抵押借贷 */}
+        <Stack.Screen
+          name="Lending"
+          component={LendingScreen}
           options={{
             gestureEnabled: true,
             ...fastSlideAnimation,

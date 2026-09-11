@@ -12,6 +12,7 @@ import {
   Easing,
   StatusBar,
   Alert,
+  Image,
 } from 'react-native';
 import { Text } from '@rneui/themed';
 import { useAppStore } from '../store/useAppStore';
@@ -424,9 +425,13 @@ const LaunchScreen: React.FC<LaunchScreenProps> = ({ navigation }) => {
       {/* Logo 区域 */}
       <View style={styles.logoContainer}>
         <View style={styles.logoIcon}>
-          <Text style={styles.logoText}>H</Text>
+          <Image
+            source={require('../assets/defishares-icon.png')}
+            style={styles.logoImage}
+            resizeMode="cover"
+          />
         </View>
-        <Text style={styles.appName}>HDEX</Text>
+        <Text style={styles.appName}>Defishares</Text>
         <Text style={styles.tagline}>数字资产交易平台</Text>
       </View>
 
@@ -443,7 +448,7 @@ const LaunchScreen: React.FC<LaunchScreenProps> = ({ navigation }) => {
 
       {/* 底部版权信息 */}
       <View style={styles.footer}>
-        <Text style={styles.footerText}>© 2024 HDEX. All rights reserved.</Text>
+        <Text style={styles.footerText}>© 2026 Defishares. All rights reserved.</Text>
       </View>
     </View>
   );
@@ -463,18 +468,14 @@ const styles = StyleSheet.create({
   logoIcon: {
     width: 100,
     height: 100,
-    borderRadius: 24,
-    backgroundColor: '#1A1A1A',
-    justifyContent: 'center',
-    alignItems: 'center',
+    borderRadius: 50,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
     marginBottom: 20,
-    borderWidth: 2,
-    borderColor: '#00D094',
   },
-  logoText: {
-    fontSize: 48,
-    fontWeight: 'bold',
-    color: '#00D094',
+  logoImage: {
+    width: '100%',
+    height: '100%',
   },
   appName: {
     fontSize: 36,

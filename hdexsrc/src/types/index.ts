@@ -208,6 +208,7 @@ export type RootStackParamList = {
   };
   Invitation: undefined;              // 邀请计划页面
   DailyCheckin: undefined;            // 每日签到页面
+  Lending: undefined;                 // DFS 抵押借贷页面
 };
 
 // K线来源类型

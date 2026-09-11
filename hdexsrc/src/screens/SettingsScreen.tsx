@@ -197,6 +197,7 @@ const SettingsScreen: React.FC = () => {
 
   // 验证 PIN 并启用生物认证
   const handleVerifyPinAndEnableBiometric = async () => {
+    if (isVerifying) return;
     if (!currentAccount?.id || !pinCode) {
       setPinError('请输入 PIN 码');
       return;
@@ -207,30 +208,30 @@ const SettingsScreen: React.FC = () => {
 
     try {
       // 1. 使用 PIN 解密获取私钥
-      const result = await secureStorageService.retrievePrivateKeyWithPin(
+      const result = await secureStorageService.retrieveAllKeysWithPin(
         currentAccount.id,
         pinCode
       );
 
-      if (!result.success || !result.privateKey) {
+      if (!result.success || !result.keys) {
         setPinError(result.error || 'PIN 码错误');
         setIsVerifying(false);
         return;
       }
 
       // 2. 启用生物认证存储
-      const success = await secureStorageService.enableBiometricStorage(
+      const enrollment = await secureStorageService.enableBiometricStorageWithResult(
         currentAccount.id,
-        result.privateKey
+        result.keys
       );
 
-      if (success) {
+      if (enrollment.success) {
         setBiometricsEnabled(true);
         setShowPinModal(false);
         setPinCode('');
         Toast.success(`${getBiometricDisplayName()}已开启`);
       } else {
-        setPinError('启用生物认证失败，请重试');
+        setPinError(enrollment.error || '启用生物认证失败，请重试');
       }
     } catch (error) {
       console.error('[Settings] 启用生物认证失败:', error);
@@ -1521,4 +1522,3 @@ const styles = StyleSheet.create({
 });
 
 export default SettingsScreen;
-

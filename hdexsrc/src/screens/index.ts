@@ -19,4 +19,4 @@ export { default as AboutScreen } from './AboutScreen';
 export { default as WebViewScreen } from './WebViewScreen';
 export { default as InvitationScreen } from './InvitationScreen';
 export { default as DailyCheckinScreen } from './DailyCheckinScreen';
-
+export { default as LendingScreen } from './LendingScreen';
