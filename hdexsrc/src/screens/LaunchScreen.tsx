@@ -431,7 +431,7 @@ const LaunchScreen: React.FC<LaunchScreenProps> = ({ navigation }) => {
             resizeMode="cover"
           />
         </View>
-        <Text style={styles.appName}>Defishares</Text>
+        <Text style={styles.appName}>DefiShares</Text>
         <Text style={styles.tagline}>数字资产交易平台</Text>
       </View>
 
@@ -448,7 +448,7 @@ const LaunchScreen: React.FC<LaunchScreenProps> = ({ navigation }) => {
 
       {/* 底部版权信息 */}
       <View style={styles.footer}>
-        <Text style={styles.footerText}>© 2026 Defishares. All rights reserved.</Text>
+        <Text style={styles.footerText}>© 2026 DefiShares. All rights reserved.</Text>
       </View>
     </View>
   );

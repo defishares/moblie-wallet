@@ -114,28 +114,28 @@ android {
         hdexmain {
             dimension "channel"
             applicationId "org.rwacn.hdexapp"
-            resValue "string", "app_name", "Defishares"
+            resValue "string", "app_name", "DefiShares"
             buildConfigField "String", "CHANNEL_TYPE", "\"hdexmain\""
         }
         // 主网管理员版
         hdexmainadmin {
             dimension "channel"
             applicationId "org.rwacn.hdexapp.admin"
-            resValue "string", "app_name", "Defishares管理(主)"
+            resValue "string", "app_name", "DefiShares管理(主)"
             buildConfigField "String", "CHANNEL_TYPE", "\"hdexmainadmin\""
         }
         // 测试网普通版
         hdextest {
             dimension "channel"
             applicationId "org.rwacn.hdexapp.testnet"
-            resValue "string", "app_name", "Defishares测试网"
+            resValue "string", "app_name", "DefiShares测试网"
             buildConfigField "String", "CHANNEL_TYPE", "\"hdextest\""
         }
         // 测试网管理员版
         hdextestadmin {
             dimension "channel"
             applicationId "org.rwacn.hdexapp.testnet.admin"
-            resValue "string", "app_name", "Defishares管理(测)"
+            resValue "string", "app_name", "DefiShares管理(测)"
             buildConfigField "String", "CHANNEL_TYPE", "\"hdextestadmin\""
         }
     }

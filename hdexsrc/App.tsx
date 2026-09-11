@@ -1,5 +1,5 @@
 /**
- * Defishares App 入口文件
+ * DefiShares App 入口文件
  * 数字资产交易平台 React Native 应用
  * 
  * 技术栈：

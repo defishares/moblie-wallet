@@ -23,7 +23,7 @@ import {
 } from '../config/constants';
 
 // 官网地址
-const OFFICIAL_WEBSITE = 'https://rwacn.org';
+const OFFICIAL_WEBSITE = 'https://defishares.org';
 
 const AboutScreen: React.FC = () => {
   const navigation = useNavigation();
@@ -72,13 +72,13 @@ const AboutScreen: React.FC = () => {
               />
             </View>
           </View>
-          <Text style={styles.appName}>Defishares v{APP_VERSION}</Text>
+          <Text style={styles.appName}>DefiShares v{APP_VERSION}</Text>
         </View>
 
         {/* 产品介绍 */}
         <View style={styles.descriptionSection}>
           <Text style={styles.descriptionText}>
-            Defishares 是一款安全、高效的去中心化交易平台。基于石墨烯区块链技术打造，为您提供媲美中心化交易所的流畅体验，同时确保资产完全由您掌控。
+            DefiShares 是一款安全、高效的去中心化交易平台。基于石墨烯区块链技术打造，为您提供媲美中心化交易所的流畅体验，同时确保资产完全由您掌控。
           </Text>
         </View>
 
@@ -114,7 +114,7 @@ const AboutScreen: React.FC = () => {
               {__DEV__ ? 'Debug' : 'Release'}
             </Text>
           </View>
-          <Text style={styles.footerVersion}>Defishares v{APP_VERSION}</Text>
+          <Text style={styles.footerVersion}>DefiShares v{APP_VERSION}</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
