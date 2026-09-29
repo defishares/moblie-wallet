@@ -3,7 +3,7 @@
  * 提供生物认证设置、清除缓存和查看版本号等功能
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -24,18 +24,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useNavigation, NavigationProp } from '@react-navigation/native';
 import type { RootStackParamList, VersionCheckResult, ApiNodeInfo, NodeTestResult } from '../types';
-import { localCacheManager, secureStorageService, chainServiceMgr } from '../services';
+import { localCacheManager, secureStorageService, chainServiceMgr, unlockSession } from '../services';
 import { useAccountStore } from '../store/useAccountStore';
+import { useMarketStore } from '../store/useMarketStore';
 import { useApiNodeStore } from '../store/useApiNodeStore';
 import { checkAppVersion } from '../store/useChainConfigStore';
 import { showVersionUpdateAlert } from '../utils';
 import { Toast, ActionSheet } from '../components';
 import type { BiometricType } from '../types';
-import { APP_VERSION } from '../config/constants';
+import { APP_VERSION, isAnnouncementAdmin } from '../config/constants';
 
 const SettingsScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp<RootStackParamList>>();
-  const { currentAccount } = useAccountStore();
+  const { currentAccount, logout, removeAccount } = useAccountStore();
   const [isClearing, setIsClearing] = useState(false);
 
   // 生物认证相关状态
@@ -49,9 +50,21 @@ const SettingsScreen: React.FC = () => {
   const [showPinCode, setShowPinCode] = useState(false);
   const [pinError, setPinError] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
+  const [pinModalPurpose, setPinModalPurpose] = useState<'enableBiometric' | 'deleteAccount'>('enableBiometric');
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
 
   // 版本检测状态
   const [versionCheckResult, setVersionCheckResult] = useState<VersionCheckResult | null>(null);
+  const versionTapCount = useRef(0);
+  const versionTapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    versionTapCount.current = 0;
+    return () => {
+      if (versionTapTimer.current) clearTimeout(versionTapTimer.current);
+      versionTapCount.current = 0;
+    };
+  }, [currentAccount?.id, currentAccount?.name]);
 
   // API 节点相关状态
   const {
@@ -84,23 +97,7 @@ const SettingsScreen: React.FC = () => {
   // 用于记录当前操作的节点（切换时使用）
   const actionTargetNodeRef = React.useRef<ApiNodeInfo | null>(null);
 
-  // 初始化生物认证状态
-  useEffect(() => {
-    initializeBiometricState();
-  }, [currentAccount?.id]);
-
-  // 检查版本更新
-  useEffect(() => {
-    const result = checkAppVersion();
-    setVersionCheckResult(result);
-  }, []);
-
-  // 初始化加载节点设置
-  useEffect(() => {
-    loadApiNodeSettings();
-  }, [loadApiNodeSettings]);
-
-  const initializeBiometricState = async () => {
+  const initializeBiometricState = useCallback(async () => {
     if (!currentAccount?.id) return;
 
     try {
@@ -114,10 +111,32 @@ const SettingsScreen: React.FC = () => {
     } catch (error) {
       console.error('[Settings] 获取生物认证状态失败:', error);
     }
-  };
+  }, [currentAccount?.id]);
+
+  // 初始化生物认证状态
+  useEffect(() => {
+    initializeBiometricState();
+  }, [initializeBiometricState]);
+
+  // 检查版本更新
+  useEffect(() => {
+    const result = checkAppVersion();
+    setVersionCheckResult(result);
+  }, []);
+
+  // 初始化加载节点设置
+  useEffect(() => {
+    loadApiNodeSettings();
+  }, [loadApiNodeSettings]);
 
   // 获取生物认证显示名称
   const getBiometricDisplayName = (): string => {
+    // Android devices may temporarily report no currently available strong
+    // biometric (for example after a system security lock). Keep the settings
+    // entry understandable while the user resolves the system state.
+    if (biometricType === 'None' && Platform.OS === 'android') {
+      return '指纹识别';
+    }
     return secureStorageService.getBiometricDisplayName(biometricType);
   };
 
@@ -132,7 +151,7 @@ const SettingsScreen: React.FC = () => {
       case 'Iris':
         return 'eye-outline';
       default:
-        return 'lock-outline';
+        return Platform.OS === 'android' ? 'fingerprint' : 'lock-outline';
     }
   };
 
@@ -155,12 +174,88 @@ const SettingsScreen: React.FC = () => {
     return `v${APP_VERSION} (已是最新版本)`;
   };
 
-  // 切换生物认证
-  const handleToggleBiometric = async (newValue: boolean) => {
+  // 连续点击版本号 5 次进入隐藏公告管理
+  const handleVersionTap = () => {
+    if (!isAnnouncementAdmin(currentAccount)) {
+      versionTapCount.current = 0;
+      if (versionTapTimer.current) clearTimeout(versionTapTimer.current);
+      handleVersionPress();
+      return;
+    }
+    versionTapCount.current += 1;
+    if (versionTapTimer.current) clearTimeout(versionTapTimer.current);
+    if (versionTapCount.current >= 5) {
+      versionTapCount.current = 0;
+      navigation.navigate('AnnouncementAdmin');
+      return;
+    }
+    // 等待连续点击结束，避免更新提示打断管理员的五次点击。
+    versionTapTimer.current = setTimeout(() => {
+      versionTapCount.current = 0;
+      handleVersionPress();
+    }, 1800);
+  };
+
+  // 使用已建立的一小时解锁会话启用生物认证；只有没有会话时才要求输入 PIN。
+  const enableBiometricWithKeys = async (keys: { [key: string]: string | undefined }) => {
     if (!currentAccount?.id) return;
 
+    setIsVerifying(true);
+    setPinError('');
+    try {
+      const enrollment = await secureStorageService.enableBiometricStorageWithResult(
+        currentAccount.id,
+        keys
+      );
+
+      if (enrollment.success) {
+        setBiometricsEnabled(true);
+        setShowPinModal(false);
+        setPinCode('');
+        Toast.success(`${getBiometricDisplayName()}已开启`);
+      } else {
+        setPinError(enrollment.error || '启用生物认证失败，请重试');
+        Toast.error(enrollment.error || '启用生物认证失败，请重试');
+      }
+    } catch (error) {
+      console.error('[Settings] 启用生物认证失败:', error);
+      setPinError('操作失败，请重试');
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  // 切换生物认证
+  const handleToggleBiometric = async (newValue: boolean) => {
+    if (!currentAccount?.id || isVerifying || isBiometricLoading) return;
+
     if (newValue) {
+      // Re-check when the user taps the switch. A previous result may have
+      // reflected Samsung's temporary strong-auth lock rather than hardware.
+      if (biometricType === 'None') {
+        setIsBiometricLoading(true);
+        try {
+          const detectedType = await secureStorageService.getSupportedBiometricType();
+          setBiometricType(detectedType);
+          if (detectedType === 'None') {
+            Alert.alert(
+              '暂时无法使用指纹',
+              '请先用手机锁屏密码解锁一次，并确认已在系统设置中录入指纹，然后返回这里重试。',
+            );
+            return;
+          }
+        } finally {
+          setIsBiometricLoading(false);
+        }
+      }
+
       // 启用生物认证 - 需要先验证 PIN 码获取私钥
+      const cachedKeys = unlockSession.getKeys(currentAccount.id);
+      if (cachedKeys) {
+        await enableBiometricWithKeys(cachedKeys);
+        return;
+      }
+      setPinModalPurpose('enableBiometric');
       setShowPinModal(true);
     } else {
       // 禁用生物认证
@@ -195,10 +290,105 @@ const SettingsScreen: React.FC = () => {
     }
   };
 
-  // 验证 PIN 并启用生物认证
-  const handleVerifyPinAndEnableBiometric = async () => {
+  // 完成注销账号：清除设备上的密钥和账号记录
+  const finalizeAccountDeletion = async () => {
+    if (!currentAccount?.id || isDeletingAccount) return;
+
+    setIsDeletingAccount(true);
+    try {
+      const accountId = currentAccount.id;
+      const cleared = await secureStorageService.clearAccountSecureData(accountId);
+      if (!cleared) {
+        setPinError('清除账号安全数据失败，请重试');
+        return;
+      }
+
+      await removeAccount(accountId);
+      setShowPinModal(false);
+      setPinCode('');
+      setPinError('');
+
+      const nextAccount = useAccountStore.getState().currentAccount;
+      navigation.reset({
+        index: 0,
+        routes: [{ name: nextAccount ? 'MainTabs' : 'Login' }],
+      });
+    } catch (error) {
+      console.error('[Settings] 注销账号失败:', error);
+      setPinError('注销账号失败，请重试');
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  };
+
+  // 重要操作身份验证：优先使用指纹/面容，失败后使用 PIN
+  const authenticateAccountDeletion = async () => {
+    if (!currentAccount?.id || isDeletingAccount) return;
+
+    if (unlockSession.isActive(currentAccount.id)) {
+      await finalizeAccountDeletion();
+      return;
+    }
+
+    if (biometricsEnabled && biometricType !== 'None') {
+      setIsBiometricLoading(true);
+      try {
+        const result = await secureStorageService.retrieveAllKeysWithBiometric(currentAccount.id);
+        if (result.success) {
+          await finalizeAccountDeletion();
+          return;
+        }
+      } catch (error) {
+        console.warn('[Settings] 注销账号生物认证失败:', error);
+      } finally {
+        setIsBiometricLoading(false);
+      }
+    }
+
+    setPinModalPurpose('deleteAccount');
+    setPinError('');
+    setShowPinModal(true);
+  };
+
+  // 注销账号入口
+  const handleDeleteAccount = () => {
+    if (!currentAccount) return;
+
+    Alert.alert(
+      '重要操作提示',
+      `注销账号将从此设备移除“${currentAccount.name}”及其私钥，且无法恢复。链上账号不会被删除，请确认继续。`,
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '继续注销', style: 'destructive', onPress: authenticateAccountDeletion },
+      ],
+    );
+  };
+
+  // 退出登录（保留设备上的账号和密钥）
+  const handleLogout = () => {
+    Alert.alert('退出登录', '退出后仍可在登录页选择此账号重新登录。', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '退出登录',
+        style: 'destructive',
+        onPress: async () => {
+          await logout();
+          navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+        },
+      },
+    ]);
+  };
+
+  // 验证 PIN 并执行当前操作
+  const handleVerifyPin = async () => {
     if (isVerifying) return;
-    if (!currentAccount?.id || !pinCode) {
+    if (!currentAccount?.id) {
+      setPinError('请输入 PIN 码');
+      return;
+    }
+
+    const cachedKeys = unlockSession.getKeys(currentAccount.id);
+    if (!pinCode && !cachedKeys) {
       setPinError('请输入 PIN 码');
       return;
     }
@@ -208,10 +398,9 @@ const SettingsScreen: React.FC = () => {
 
     try {
       // 1. 使用 PIN 解密获取私钥
-      const result = await secureStorageService.retrieveAllKeysWithPin(
-        currentAccount.id,
-        pinCode
-      );
+      const result = cachedKeys
+        ? { success: true, keys: cachedKeys }
+        : await secureStorageService.retrieveAllKeysWithPin(currentAccount.id, pinCode);
 
       if (!result.success || !result.keys) {
         setPinError(result.error || 'PIN 码错误');
@@ -219,20 +408,13 @@ const SettingsScreen: React.FC = () => {
         return;
       }
 
-      // 2. 启用生物认证存储
-      const enrollment = await secureStorageService.enableBiometricStorageWithResult(
-        currentAccount.id,
-        result.keys
-      );
-
-      if (enrollment.success) {
-        setBiometricsEnabled(true);
-        setShowPinModal(false);
-        setPinCode('');
-        Toast.success(`${getBiometricDisplayName()}已开启`);
-      } else {
-        setPinError(enrollment.error || '启用生物认证失败，请重试');
+      if (pinModalPurpose === 'deleteAccount') {
+        await finalizeAccountDeletion();
+        return;
       }
+
+      // 启用生物认证存储
+      await enableBiometricWithKeys(result.keys);
     } catch (error) {
       console.error('[Settings] 启用生物认证失败:', error);
       setPinError('操作失败，请重试');
@@ -247,6 +429,7 @@ const SettingsScreen: React.FC = () => {
     setPinCode('');
     setPinError('');
     setShowPinCode(false);
+    setPinModalPurpose('enableBiometric');
   };
 
   // ============================================
@@ -584,6 +767,9 @@ const SettingsScreen: React.FC = () => {
     );
   };
 
+  const officialBuiltinNodes = builtinNodes.filter(node => node.group !== 'community');
+  const communityBuiltinNodes = builtinNodes.filter(node => node.group === 'community');
+
   // 清除本地缓存
   const handleClearCache = () => {
     Alert.alert(
@@ -602,6 +788,8 @@ const SettingsScreen: React.FC = () => {
             try {
               const success = localCacheManager.clearAll();
               if (success) {
+                // 同步清理内存中的自定义交易对和收藏，避免清缓存后当前页面仍显示旧数据。
+                useMarketStore.getState().reset();
                 Alert.alert('成功', '本地缓存已清除');
               } else {
                 Alert.alert('错误', '清除缓存失败，请重试');
@@ -626,6 +814,7 @@ const SettingsScreen: React.FC = () => {
     onPress?: () => void,
     showArrow: boolean = true,
     rightContent?: React.ReactNode,
+    titleColor?: string,
   ) => (
     <TouchableOpacity
       style={styles.settingItem}
@@ -638,7 +827,7 @@ const SettingsScreen: React.FC = () => {
           <Icon name={icon} size={22} color="#FFFFFF" />
         </View>
         <View style={styles.settingTextContainer}>
-          <Text style={styles.settingTitle}>{title}</Text>
+          <Text style={[styles.settingTitle, titleColor ? { color: titleColor } : null]}>{title}</Text>
           {subtitle && <Text style={styles.settingSubtitle}>{subtitle}</Text>}
         </View>
       </View>
@@ -666,6 +855,32 @@ const SettingsScreen: React.FC = () => {
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+        {/* 账号操作 */}
+        {currentAccount && (
+          <View style={styles.settingsSection}>
+            <Text style={styles.sectionTitle}>账号</Text>
+            <View style={styles.settingsList}>
+              {renderSettingItem(
+                'logout',
+                '退出登录',
+                '保留账号和密钥，下次可继续登录',
+                handleLogout,
+                true,
+              )}
+              <View style={styles.divider} />
+              {renderSettingItem(
+                'account-remove-outline',
+                '注销账号',
+                '从此设备移除账号及私钥，无法恢复',
+                handleDeleteAccount,
+                true,
+                undefined,
+                '#FF6B6B',
+              )}
+            </View>
+          </View>
+        )}
+
         {/* 应用设置 */}
         <View style={styles.settingsSection}>
           <Text style={styles.sectionTitle}>应用设置</Text>
@@ -695,7 +910,7 @@ const SettingsScreen: React.FC = () => {
         </View>
 
         {/* 安全设置 */}
-        {currentAccount && biometricType !== 'None' && (
+        {currentAccount && (
           <View style={styles.settingsSection}>
             <Text style={styles.sectionTitle}>安全设置</Text>
             <View style={styles.settingsList}>
@@ -708,7 +923,11 @@ const SettingsScreen: React.FC = () => {
                   <View style={styles.settingTextContainer}>
                     <Text style={styles.settingTitle}>{getBiometricDisplayName()}解锁</Text>
                     <Text style={styles.settingSubtitle}>
-                      {biometricsEnabled ? '已开启' : '使用' + getBiometricDisplayName() + '快速解锁'}
+                      {biometricsEnabled
+                        ? '已开启'
+                        : biometricType === 'None'
+                          ? '点击开关检测并开启指纹解锁'
+                          : '使用' + getBiometricDisplayName() + '快速解锁'}
                     </Text>
                   </View>
                 </View>
@@ -753,8 +972,8 @@ const SettingsScreen: React.FC = () => {
               'information-outline',
               '版本号',
               undefined,
-              versionCheckResult?.hasUpdate ? handleVersionPress : undefined,
-              versionCheckResult?.hasUpdate || false,
+              handleVersionTap,
+              false,
               <Text style={[
                 styles.versionText,
                 versionCheckResult?.hasUpdate && styles.versionUpdateText,
@@ -827,7 +1046,15 @@ const SettingsScreen: React.FC = () => {
 
               {/* 官方节点 */}
               <Text style={styles.nodeGroupTitle}>官方节点</Text>
-              {builtinNodes.map(node => renderNodeItem(node))}
+              {officialBuiltinNodes.map(node => renderNodeItem(node))}
+
+              {/* 社区节点 */}
+              {communityBuiltinNodes.length > 0 && (
+                <>
+                  <Text style={styles.nodeGroupTitle}>社区节点</Text>
+                  {communityBuiltinNodes.map(node => renderNodeItem(node))}
+                </>
+              )}
 
               {/* 链动态节点 */}
               {chainNodes.length > 0 && (
@@ -987,7 +1214,9 @@ const SettingsScreen: React.FC = () => {
             </View>
 
             <Text style={styles.modalSubtitle}>
-              请输入 PIN 码以启用{getBiometricDisplayName()}
+              {pinModalPurpose === 'deleteAccount'
+                ? '请输入 PIN 码以确认注销账号'
+                : `请输入 PIN 码以启用${getBiometricDisplayName()}`}
             </Text>
 
             <View style={styles.pinInputContainer}>
@@ -1004,7 +1233,7 @@ const SettingsScreen: React.FC = () => {
                 autoCapitalize="none"
                 autoCorrect={false}
                 editable={!isVerifying}
-                onSubmitEditing={handleVerifyPinAndEnableBiometric}
+                onSubmitEditing={handleVerifyPin}
                 returnKeyType="done"
               />
               <TouchableOpacity
@@ -1039,7 +1268,7 @@ const SettingsScreen: React.FC = () => {
                   styles.modalConfirmButton,
                   (!pinCode || isVerifying) && styles.modalButtonDisabled,
                 ]}
-                onPress={handleVerifyPinAndEnableBiometric}
+                onPress={handleVerifyPin}
                 disabled={!pinCode || isVerifying}
               >
                 {isVerifying ? (

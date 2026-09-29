@@ -18,6 +18,7 @@ import { Text } from '@rneui/themed';
 import { useAppStore } from '../store/useAppStore';
 import { useAccountStore } from '../store/useAccountStore';
 import { useApiNodeStore } from '../store/useApiNodeStore';
+import { useBalanceStore } from '../store/useBalanceStore';
 import { checkAppVersion } from '../store/useChainConfigStore';
 import { chainServiceMgr, localCacheManager } from '../services';
 import {
@@ -265,6 +266,8 @@ const LaunchScreen: React.FC<LaunchScreenProps> = ({ navigation }) => {
     try {
       // 0. 初始化本地缓存管理器
       await localCacheManager.initialize();
+      // 恢复资产页上次选择的估值币种，避免重启后回到默认 USDT
+      useBalanceStore.getState().loadValuationAssetFromCache();
       console.log('[Launch] 本地缓存初始化完成');
 
       // 1. 加载本地账号数据和节点设置

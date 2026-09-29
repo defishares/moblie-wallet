@@ -29,6 +29,8 @@ export type ChannelType = 'hdextest' | 'hdextestadmin' | 'hdexmain' | 'hdexmaina
 export interface WsNodeConfig {
   name: string;            // 节点名称
   url: string;             // WebSocket URL
+  /** 节点分组，用于在设置页区分官方节点和社区节点 */
+  group?: 'official' | 'community';
 }
 
 export interface NetworkConfig {
@@ -105,20 +107,17 @@ export const DEFAULT_MODULE_CONFIG: ModuleConfig = {
 
 export const MAINNET_CONFIG: NetworkConfig = {
   type: 'mainnet',
-  name: '主网',
+  name: 'DeFiShares',
   wsNodes: [
-    { name: 'DefiShares 节点01', url: 'wss://api-01.defishares.org/ws/' },
-    { name: '官方节点01', url: 'wss://api.rwacn.org' },
-    { name: '官方节点02', url: 'wss://api1.rwacn.org' },
-    { name: '官方节点03', url: 'wss://api2.rwacn.org' },
-    { name: 'DeFiShares 节点', url: 'wss://api.defishares.org/ws/' },
+    { name: 'DeFiShares 节点01', url: 'wss://api-01.defishares.org/ws/', group: 'official' },
+    { name: 'DeFiShares 官方节点', url: 'wss://api.defishares.org/ws/', group: 'official' },
+    { name: '社区节点', url: 'wss://8.148.185.200:8008', group: 'community' },
   ],
-  defaultWsNode: 'wss://api-01.defishares.org/ws/',
-  coreAsset: 'HBW',
+  defaultWsNode: 'wss://api.defishares.org/ws/',
+  coreAsset: 'DFS',
   coreAssetId: '1.3.0',
   defaultQuoteAsset: 'USDT',
-  // 主网链 ID
-  chainId: 'd8ee83d8ca641c9bb06d0e1fe09f170fdced44ab55798b41c90f2d47116986d4',
+  chainId: '7089639ad55d91ef53946f3fc4dc86ea5b8a4917edcfce6d3c39bc259657acb5',
 };
 
 // ============================================
@@ -129,11 +128,11 @@ export const TESTNET_CONFIG: NetworkConfig = {
   type: 'testnet',
   name: '测试网',
   wsNodes: [
-    { name: 'DefiShares 节点01', url: 'wss://api-01.defishares.org/ws/' },
-    { name: 'DeFiShares 节点', url: 'wss://api.defishares.org/ws/' },
-    { name: '测试节点01', url: 'wss://testapi.rwacn.org' },
+    { name: 'DefiShares 节点01', url: 'wss://api-01.defishares.org/ws/', group: 'official' },
+    { name: '官方节点01', url: 'wss://api.defishares.org/ws/', group: 'official' },
+    { name: '社区节点', url: 'wss://8.148.185.200:8008', group: 'community' },
   ],
-  defaultWsNode: 'wss://api-01.defishares.org/ws/',
+  defaultWsNode: 'wss://api.defishares.org/ws/',
   coreAsset: 'DFS',
   coreAssetId: '1.3.0',
   defaultQuoteAsset: 'CNY',
@@ -141,8 +140,8 @@ export const TESTNET_CONFIG: NetworkConfig = {
   chainId: '7089639ad55d91ef53946f3fc4dc86ea5b8a4917edcfce6d3c39bc259657acb5',
 };
 
-// 主网基础交易对兜底配置。
-// IMarket.list 使用 [quote, base] 顺序，这些交易对的行情仍通过节点实时查询。
+// 盘口初始化使用的主网默认交易对；主区列表不使用本地兜底，完全由链上管理员配置。
+// IMarket.list 使用 [quote, base] 顺序。
 export const DEFAULT_MAINNET_MARKET_PAIRS: ReadonlyArray<readonly [string, string]> = [
   ['CNY', 'DFS'],
   ['CNY', 'GOLD'],
@@ -190,7 +189,7 @@ export const CHANNEL_HDEXMAIN: ChannelConfig = {
   appName: 'DefiShares',
   channelId: 1000,
   isAdminMode: false,
-  onChainSettingsAccount: '',// 可设置配置数据
+  onChainSettingsAccount: '1.2.185992',// 主网链上 APP 配置账户
   networkType: 'mainnet',
 };
 
@@ -200,7 +199,7 @@ export const CHANNEL_HDEXMAINADMIN: ChannelConfig = {
   appName: 'DefiShares管理(主)',
   channelId: 1000,
   isAdminMode: true,
-  onChainSettingsAccount: '',// 可设置配置数据
+  onChainSettingsAccount: '1.2.185992',// 主网链上 APP 配置账户
   networkType: 'mainnet',
 };
 
@@ -300,7 +299,7 @@ export const MAX_RECONNECT_ATTEMPTS = 5;
 export const APP_NAME = CURRENT_CHANNEL.appName;
 
 // 应用版本
-export const APP_VERSION = '0.1.2';
+export const APP_VERSION = '1.0.4';
 
 // 版本号
 export const APP_VERSION_CODE = 202511261;
@@ -391,6 +390,16 @@ export const GRAPHENE_DEFAULT_MAX_SHORT_SQUEEZE_RATIO = 1500;
 
 // 类别：APP设置
 export const kAppStorageCatalogAppSettings = 'app.settings.v2';
+export const kAppStorageKeyAnnouncements = 'announcements.v1';
+export {
+  ANNOUNCEMENT_ADMINS,
+  ANNOUNCEMENT_ADMIN_ACCOUNT_IDS,
+  kAppStorageKeyAnnouncementAdmins,
+  setConfiguredAnnouncementAdmins,
+  getConfiguredAnnouncementAdmins,
+  isAnnouncementAdmin,
+  isAnnouncementRootAdmin,
+} from './announcementAdmins';
 
 // 类别：网格机器人的类别
 export const kAppStorageCatalogBotsGridBots = 'system.bots.grid_bots';
@@ -400,6 +409,9 @@ export const kAppStorageKeyAppSettings_AppInfo = 'app.info.%s';
 
 // KEY：APP设置 > 通用配置
 export const kAppStorageKeyAppSettings_CommonVer = 'common.settings.ver.v1';
+
+/** 主网市场列表的独立链上配置（兼容写入到通用配置的 markets 字段）。 */
+export const kAppStorageKeyMainnetMarkets = 'mainnet.markets.v1';
 
 // KEY：APP设置 > 动态多语言
 export const kAppStorageKeyAppSettings_LangKeyBase = 'dynamic.lang.';

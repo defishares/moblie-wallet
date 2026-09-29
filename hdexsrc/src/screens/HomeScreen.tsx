@@ -9,7 +9,7 @@
  * - 跌幅榜：跌幅 Top5
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -18,14 +18,18 @@ import {
   StatusBar,
   FlatList,
   Image,
+  Dimensions,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from 'react-native';
-import { Text, Button } from '@rneui/themed';
+import { Text } from '@rneui/themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAppStore } from '../store/useAppStore';
 import {
+  useMarketStore,
   useComputedMarketList,
   useFavoritesList,
   type ComputedMarketItem,
@@ -34,11 +38,16 @@ import {
   useTotalEstimatedValue,
   useValuationAsset,
 } from '../store/useBalanceStore';
-import { backgroundService } from '../services';
+import { backgroundService, unlockSession } from '../services';
+import { useAccountStore } from '../store/useAccountStore';
 import type { RootStackParamList } from '../types';
 import { Toast } from '../components/Toast';
 import { MoreFunctionsSheet } from '../components/MoreFunctionsSheet';
+import { QuoteAssetSelector } from '../components/QuoteAssetSelector';
 import { getCoinIcon, getColorForAsset } from '../utils';
+import { getAssetConversionRate } from '../utils/assetConversion';
+import { formatQuotePrice } from '../utils/quoteDisplay';
+import { useUnlock } from '../hooks/useUnlock';
 
 // 首页 Tab 类型
 type HomeTabType = 'favorites' | 'hot' | 'gainers' | 'losers';
@@ -50,6 +59,7 @@ const quickActions = [
   { id: 'transfer', icon: 'arrow-up', label: '转账' },
   { id: 'receive', icon: 'arrow-down', label: '收款' },
   { id: 'buy', icon: 'credit-card-outline', label: '买币' },
+  { id: 'flashSwap', icon: 'lightning-bolt', label: '闪兑' },
   { id: 'more', icon: 'dots-horizontal', label: '更多' },
 ];
 
@@ -62,11 +72,33 @@ const assetTabs: { key: HomeTabType; label: string }[] = [
 ];
 
 const HomeScreen: React.FC = () => {
+  const announcementScrollRef = useRef<ScrollView>(null);
+  const announcementPageWidth = Dimensions.get('window').width;
   // 导航
   const navigation = useNavigation<HomeScreenNavigationProp>();
+  const currentAccount = useAccountStore(state => state.currentAccount);
+  const [walletUnlocked, setWalletUnlocked] = useState(() => (
+    currentAccount ? unlockSession.isActive(currentAccount.id) : false
+  ));
+  const { requestUnlock } = useUnlock({
+    onSuccess: () => Toast.success('钱包已解锁，当前处于 1 小时免验证期'),
+  });
+
+  useEffect(() => {
+    const syncUnlockState = () => {
+      setWalletUnlocked(currentAccount ? unlockSession.isActive(currentAccount.id) : false);
+    };
+
+    syncUnlockState();
+    return unlockSession.subscribe(syncUnlockState);
+  }, [currentAccount]);
 
   // 从 AppStore 获取数据
   const { announcements } = useAppStore();
+  const visibleAnnouncements = useMemo(
+    () => announcements.filter(item => item.enabled !== false && (!item.expiresAt || item.expiresAt > Date.now())),
+    [announcements],
+  );
 
   // 从 BalanceStore 获取总资产估值
   const totalEstimatedValue = useTotalEstimatedValue();
@@ -74,6 +106,8 @@ const HomeScreen: React.FC = () => {
 
   // 从 MarketStore 获取市场数据
   const allMarketList = useComputedMarketList();
+  const tickerMap = useMarketStore(state => state.tickerMap);
+  const selectedQuoteAsset = useMarketStore(state => state.selectedQuoteAsset);
   const favoritesList = useFavoritesList();
 
   // 当前选中的 Tab - 有自选则默认选中自选，否则默认选中热门
@@ -82,7 +116,25 @@ const HomeScreen: React.FC = () => {
   });
 
   // 当前公告索引
-  const [currentAnnouncementIndex, setCurrentAnnouncementIndex] = useState(0);
+  const [, setCurrentAnnouncementIndex] = useState(0);
+
+  // 公告每 10 秒自动轮播；手动滑动时由分页回调更新当前索引。
+  useEffect(() => {
+    setCurrentAnnouncementIndex(0);
+    announcementScrollRef.current?.scrollTo({ x: 0, animated: false });
+  }, [visibleAnnouncements.length]);
+
+  useEffect(() => {
+    if (visibleAnnouncements.length <= 1) return undefined;
+    const timer = setInterval(() => {
+      setCurrentAnnouncementIndex(previous => {
+        const next = (previous + 1) % visibleAnnouncements.length;
+        announcementScrollRef.current?.scrollTo({ x: next * announcementPageWidth, animated: true });
+        return next;
+      });
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [visibleAnnouncements.length, announcementPageWidth]);
 
   // 是否显示资产
   const [showBalance, setShowBalance] = useState(true);
@@ -91,6 +143,7 @@ const HomeScreen: React.FC = () => {
   const uniqueMarketList = useMemo(() => {
     const seen = new Set<string>();
     return allMarketList.filter(item => {
+      if (selectedQuoteAsset && item.quoteAsset !== selectedQuoteAsset) return false;
       const pairKey = `${item.baseAsset}_${item.quoteAsset}`;
       if (seen.has(pairKey)) {
         return false;
@@ -98,7 +151,7 @@ const HomeScreen: React.FC = () => {
       seen.add(pairKey);
       return true;
     });
-  }, [allMarketList]);
+  }, [allMarketList, selectedQuoteAsset]);
 
   // 计算热门榜（成交额 Top5）
   const hotList = useMemo(() => {
@@ -127,6 +180,7 @@ const HomeScreen: React.FC = () => {
       case 'favorites':
         // 自选按涨跌幅降序，最多显示5个
         return [...favoritesList]
+          .filter(item => !selectedQuoteAsset || item.quoteAsset === selectedQuoteAsset)
           .sort((a, b) => b.change24h - a.change24h)
           .slice(0, 5);
       case 'hot':
@@ -138,7 +192,7 @@ const HomeScreen: React.FC = () => {
       default:
         return [];
     }
-  }, [selectedTab, favoritesList, hotList, gainersList, losersList]);
+  }, [selectedTab, favoritesList, hotList, gainersList, losersList, selectedQuoteAsset]);
 
   // 启动后台服务
   useEffect(() => {
@@ -169,19 +223,31 @@ const HomeScreen: React.FC = () => {
           </TouchableOpacity>
         </View>
 
-        {/* 充值、C2C 和设置按钮 */}
+        {/* 充值、提现和设置按钮 */}
         <View style={styles.headerButtons}>
-          <TouchableOpacity style={styles.headerButton} onPress={() => Toast.show('敬请期待')}>
+          <TouchableOpacity style={styles.headerButton} onPress={() => navigation.navigate('BSCDeposit')}>
             <Text style={styles.headerButtonText}>充值</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.headerButton, styles.headerButtonOutline]} onPress={() => Toast.show('敬请期待')}>
-            <Text style={styles.headerButtonTextOutline}>C2C</Text>
+          <TouchableOpacity style={[styles.headerButton, styles.headerButtonOutline]} onPress={() => navigation.navigate('BSCWithdraw')}>
+            <Text style={styles.headerButtonTextOutline}>提现</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.settingsButton}
             onPress={() => navigation.navigate('Settings')}
           >
             <Icon name="cog-outline" size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.settingsButton}
+            onPress={() => requestUnlock({ forcePin: true })}
+            accessibilityRole="button"
+            accessibilityLabel={walletUnlocked ? '钱包已解锁' : '使用 PIN 解锁'}
+          >
+            <Icon
+              name={walletUnlocked ? 'lock-open-outline' : 'lock-outline'}
+              size={22}
+              color={walletUnlocked ? '#00D094' : '#FFFFFF'}
+            />
           </TouchableOpacity>
         </View>
       </View>
@@ -203,8 +269,13 @@ const HomeScreen: React.FC = () => {
         navigation.navigate('Transfer', {});
         break;
       case 'receive':
+        navigation.navigate('BSCDeposit');
+        break;
       case 'buy':
         Toast.show('敬请期待');
+        break;
+      case 'flashSwap':
+        navigation.navigate('FlashSwap');
         break;
       case 'more':
         // 显示更多功能菜单（网格布局）
@@ -228,6 +299,16 @@ const HomeScreen: React.FC = () => {
               iconBgColor: 'rgba(255, 184, 0, 0.15)',
               onPress: () => {
                 Toast.show('敬请期待');
+              },
+            },
+            {
+              key: 'bridgeHistory',
+              label: '充提查询',
+              icon: 'history',
+              iconColor: '#F0B90B',
+              iconBgColor: 'rgba(240, 185, 11, 0.15)',
+              onPress: () => {
+                navigation.navigate('BSCHistory');
               },
             },
           ],
@@ -256,42 +337,52 @@ const HomeScreen: React.FC = () => {
 
   // 渲染公告区域
   const renderAnnouncement = () => {
-    if (announcements.length === 0) return null;
-
-    const currentAnnouncement = announcements[currentAnnouncementIndex];
+    if (visibleAnnouncements.length === 0) return null;
 
     return (
-      <TouchableOpacity style={styles.announcementContainer}>
-        <View style={styles.announcementContent}>
-          {/* 左侧图标 */}
-          <View style={styles.announcementIconContainer}>
-            <View style={styles.announcementIcon}>
-              <Text style={styles.announcementIconText}>$</Text>
-            </View>
-          </View>
-
-          {/* 公告内容 */}
-          <View style={styles.announcementTextContainer}>
-            <View style={styles.announcementHeader}>
-              <View style={styles.announcementBadge}>
-                <Text style={styles.announcementBadgeText}>{currentAnnouncement.title}</Text>
+      <ScrollView
+        ref={announcementScrollRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        onMomentumScrollEnd={(event: NativeSyntheticEvent<NativeScrollEvent>) => {
+          const index = Math.round(event.nativeEvent.contentOffset.x / announcementPageWidth);
+          setCurrentAnnouncementIndex(Math.max(0, Math.min(index, visibleAnnouncements.length - 1)));
+        }}
+      >
+        {visibleAnnouncements.map((announcement, index) => <View key={announcement.id} style={{ width: announcementPageWidth }}>
+          <TouchableOpacity style={styles.announcementContainer}>
+            <View style={styles.announcementContent}>
+              {/* 左侧图标 */}
+              <View style={styles.announcementIconContainer}>
+                <View style={styles.announcementIcon}>
+                  <Text style={styles.announcementIconText}>$</Text>
+                </View>
               </View>
-              <Text style={styles.announcementIndex}>
-                {currentAnnouncementIndex + 1}/{announcements.length}
-              </Text>
+
+              {/* 公告内容 */}
+              <View style={styles.announcementTextContainer}>
+                <View style={styles.announcementHeader}>
+                  <View style={styles.announcementBadge}>
+                    <Text style={styles.announcementBadgeText}>{announcement.title}</Text>
+                  </View>
+                  <Text style={styles.announcementIndex}>{index + 1}/{visibleAnnouncements.length}</Text>
+                </View>
+                <Text style={styles.announcementText} numberOfLines={2}>
+                  {announcement.content}
+                </Text>
+              </View>
             </View>
-            <Text style={styles.announcementText} numberOfLines={2}>
-              {currentAnnouncement.content}
-            </Text>
-          </View>
-        </View>
-      </TouchableOpacity>
+          </TouchableOpacity>
+        </View>)}
+      </ScrollView>
     );
   };
 
   // 渲染资产分类 Tab
   const renderAssetTabs = () => (
     <View style={styles.assetTabsContainer}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.rankTabsScroll}>
       {assetTabs.map((tab) => (
         <TouchableOpacity
           key={tab.key}
@@ -311,6 +402,8 @@ const HomeScreen: React.FC = () => {
           </Text>
         </TouchableOpacity>
       ))}
+      </ScrollView>
+      <QuoteAssetSelector />
     </View>
   );
 
@@ -339,7 +432,7 @@ const HomeScreen: React.FC = () => {
             baseAsset: item.baseAsset,
             quoteAsset: item.quoteAsset,
             price: item.price,
-            priceUsd: item.price,
+            priceUsd: item.price * getAssetConversionRate(item.quoteAsset, 'USD', tickerMap),
             change24h: item.change24h,
             volume24h: item.volume24h,
             volume24hDisplay: item.volume24hDisplay,
@@ -380,7 +473,7 @@ const HomeScreen: React.FC = () => {
               {formatPrice(item.price)}
             </Text>
             <Text style={styles.cryptoPriceUsd}>
-              ${formatPrice(item.price)}
+              {formatQuotePrice(item.price, item.quoteAsset, formatPrice)}
             </Text>
           </View>
           <View
@@ -403,7 +496,7 @@ const HomeScreen: React.FC = () => {
     <View style={styles.emptyContainer}>
       <Icon name="chart-line" size={36} color="#333333" />
       <Text style={styles.emptyText}>
-        {selectedTab === 'favorites' ? '暂无自选' : '暂无数据'}
+        {selectedTab === 'favorites' ? '暂无自选' : selectedQuoteAsset ? `暂无 ${selectedQuoteAsset} 交易对` : '暂无数据'}
       </Text>
       {selectedTab === 'favorites' && (
         <Text style={styles.emptySubText}>
@@ -495,10 +588,11 @@ const styles = StyleSheet.create({
   },
   headerButtons: {
     flexDirection: 'row',
-    gap: 10,
+    alignItems: 'center',
+    gap: 6,
   },
   headerButton: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 10,
     paddingVertical: 8,
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
@@ -624,9 +718,11 @@ const styles = StyleSheet.create({
   // 资产 Tab 样式
   assetTabsContainer: {
     flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 20,
     marginBottom: 16,
   },
+  rankTabsScroll: { flex: 1 },
   assetTab: {
     marginRight: 24,
     paddingBottom: 8,

@@ -260,6 +260,7 @@
 import * as Keychain from 'react-native-keychain';
 import { hash } from 'bitsharesjs';
 import type { BiometricType, UnlockResult } from '../types';
+import { unlockSession } from './unlock_session';
 
 // Keychain 服务名称前缀
 const SERVICE_PREFIX = 'com.hdex.wallet';
@@ -501,6 +502,10 @@ class SecureStorageService {
       switch (biometryType) {
         case Keychain.BIOMETRY_TYPE.FACE_ID:
           return 'FaceID';
+        case Keychain.BIOMETRY_TYPE.FACE:
+          return 'FaceID';
+        case Keychain.BIOMETRY_TYPE.OPTIC_ID:
+          return 'FaceID';
         case Keychain.BIOMETRY_TYPE.TOUCH_ID:
           return 'TouchID';
         case Keychain.BIOMETRY_TYPE.FINGERPRINT:
@@ -597,6 +602,7 @@ class SecureStorageService {
         }
       );
 
+      if (result !== false) unlockSession.clear(accountId);
       console.log(`[SecureStorage] 账号安全数据已初始化 (账号: ${accountId}, 私钥数: ${Object.keys(encryptedKeys).length})`);
       return result !== false;
     } catch (error) {
@@ -617,6 +623,11 @@ class SecureStorageService {
     keyType: KeyType = 'active'
   ): Promise<UnlockResult> {
     try {
+      const cachedKey = unlockSession.getKey(accountId, keyType);
+      if (cachedKey) {
+        return { success: true, privateKey: cachedKey };
+      }
+
       // 从 Keychain 读取安全数据
       const credentials = await Keychain.getGenericPassword({
         service: STORAGE_KEYS.SECURE_DATA(accountId),
@@ -651,6 +662,15 @@ class SecureStorageService {
         return { success: false, error: '解密私钥失败' };
       }
 
+      // 一次成功的 PIN 验证可以解密并缓存全部密钥，保证后续其它入口
+      // 在一小时会话内也能直接使用，不会因为只缓存 active 而再次验证。
+      const keys: { [key in KeyType]?: string } = {};
+      for (const [storedKeyType, storedEncryptedKey] of Object.entries(secureData.encryptedKeys)) {
+        if (storedEncryptedKey) {
+          keys[storedKeyType as KeyType] = CryptoUtils.decrypt(storedEncryptedKey, decryptionKey);
+        }
+      }
+      unlockSession.markUnlocked(accountId, keys);
       return { success: true, privateKey };
     } catch (error) {
       console.error('[SecureStorage] 读取私钥失败:', error);
@@ -668,6 +688,11 @@ class SecureStorageService {
     pin: string
   ): Promise<{ success: boolean; keys?: { [key in KeyType]?: string }; error?: string }> {
     try {
+      const cachedKeys = unlockSession.getKeys(accountId);
+      if (cachedKeys) {
+        return { success: true, keys: cachedKeys };
+      }
+
       // 从 Keychain 读取安全数据
       const credentials = await Keychain.getGenericPassword({
         service: STORAGE_KEYS.SECURE_DATA(accountId),
@@ -697,6 +722,7 @@ class SecureStorageService {
         }
       }
 
+      unlockSession.markUnlocked(accountId, keys);
       return { success: true, keys };
     } catch (error) {
       console.error('[SecureStorage] 读取所有私钥失败:', error);
@@ -754,6 +780,7 @@ class SecureStorageService {
         }
       );
 
+      if (result !== false) unlockSession.clear(accountId);
       console.log(`[SecureStorage] 已添加 ${keyType} 私钥 (账号: ${accountId})`);
       return result !== false;
     } catch (error) {
@@ -768,23 +795,7 @@ class SecureStorageService {
    * @param pin PIN 码
    */
   async verifyPin(accountId: string, pin: string): Promise<boolean> {
-    try {
-      const credentials = await Keychain.getGenericPassword({
-        service: STORAGE_KEYS.SECURE_DATA(accountId),
-      });
-
-      if (!credentials) {
-        return false;
-      }
-
-      const secureData: SecureAccountData = JSON.parse(credentials.password);
-      const computedHash = CryptoUtils.computePinHash(pin, secureData.salt);
-
-      return computedHash === secureData.pinHash;
-    } catch (error) {
-      console.error('[SecureStorage] 验证 PIN 失败:', error);
-      return false;
-    }
+    return (await this.retrieveAllKeysWithPin(accountId, pin)).success;
   }
 
   // ============================================
@@ -888,6 +899,11 @@ class SecureStorageService {
     accountId: string
   ): Promise<{ success: boolean; keys?: { [key in KeyType]?: string }; error?: string }> {
     try {
+      const cachedKeys = unlockSession.getKeys(accountId);
+      if (cachedKeys) {
+        return { success: true, keys: cachedKeys };
+      }
+
       const biometricType = await this.getSupportedBiometricType();
       const biometricName = this.getBiometricDisplayName(biometricType);
 
@@ -910,10 +926,13 @@ class SecureStorageService {
       // 解析私钥数据
       try {
         const keys = JSON.parse(credentials.password);
+        unlockSession.markUnlocked(accountId, keys);
         return { success: true, keys };
       } catch {
         // 兼容旧格式（单个私钥字符串）
-        return { success: true, keys: { active: credentials.password } };
+        const keys = { active: credentials.password };
+        unlockSession.markUnlocked(accountId, keys);
+        return { success: true, keys };
       }
     } catch (error: any) {
       console.error('[SecureStorage] 生物认证读取失败:', error);
@@ -1021,7 +1040,12 @@ class SecureStorageService {
     accountId: string,
     keyType: KeyType = 'active',
     useBiometric: boolean = true
-  ): Promise<UnlockResult & { usedMethod: 'biometric' | 'pin' | 'none' }> {
+  ): Promise<UnlockResult & { usedMethod: 'biometric' | 'pin' | 'session' | 'none' }> {
+    const cachedKey = unlockSession.getKey(accountId, keyType);
+    if (cachedKey) {
+      return { success: true, privateKey: cachedKey, usedMethod: 'session' };
+    }
+
     // 检查是否启用了生物认证
     const biometricsEnabled = await this.isBiometricsEnabled(accountId);
 
@@ -1051,7 +1075,12 @@ class SecureStorageService {
   async smartUnlockAllKeys(
     accountId: string,
     useBiometric: boolean = true
-  ): Promise<{ success: boolean; keys?: { [key in KeyType]?: string }; error?: string; usedMethod: 'biometric' | 'pin' | 'none' }> {
+  ): Promise<{ success: boolean; keys?: { [key in KeyType]?: string }; error?: string; usedMethod: 'biometric' | 'pin' | 'session' | 'none' }> {
+    const cachedKeys = unlockSession.getKeys(accountId);
+    if (cachedKeys) {
+      return { success: true, keys: cachedKeys, usedMethod: 'session' };
+    }
+
     // 检查是否启用了生物认证
     const biometricsEnabled = await this.isBiometricsEnabled(accountId);
 
@@ -1082,7 +1111,12 @@ class SecureStorageService {
     accountId: string,
     pin?: string,
     keyType: KeyType = 'active'
-  ): Promise<UnlockResult & { usedMethod: 'biometric' | 'pin' | 'none' }> {
+  ): Promise<UnlockResult & { usedMethod: 'biometric' | 'pin' | 'session' | 'none' }> {
+    const cachedKey = unlockSession.getKey(accountId, keyType);
+    if (cachedKey) {
+      return { success: true, privateKey: cachedKey, usedMethod: 'session' };
+    }
+
     // 先尝试生物认证
     const biometricsEnabled = await this.isBiometricsEnabled(accountId);
 
@@ -1119,6 +1153,7 @@ class SecureStorageService {
    */
   async clearAccountSecureData(accountId: string): Promise<boolean> {
     try {
+      unlockSession.clear(accountId);
       await Promise.all([
         Keychain.resetGenericPassword({ service: STORAGE_KEYS.SECURE_DATA(accountId) }),
         Keychain.resetGenericPassword({ service: STORAGE_KEYS.BIOMETRIC_KEY(accountId) }),

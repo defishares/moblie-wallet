@@ -19,15 +19,16 @@ import { useMemo } from 'react';
 import { localCacheManager } from '../services/local_cache_mgr';
 import { useChainConfigStore } from './useChainConfigStore';
 import {
+  CURRENT_NETWORK,
   CURRENT_NETWORK_TYPE,
   DEFAULT_MAINNET_MARKET_GROUP,
-  DEFAULT_MAINNET_MARKET_PAIRS,
 } from '../config';
 import type {
   MarketCategory,
   TickerData,
   SortState,
   IChainAppSettings,
+  CustomTradingPair,
 } from '../types';
 
 type MarketDefinition = {
@@ -36,33 +37,61 @@ type MarketDefinition = {
   quote: string;
 };
 
-/**
- * 主网行情固定展示核心交易对，ticker 数值始终从节点实时取得。
- * 其他网络继续使用链上 appSettings.markets，便于后续动态维护测试市场。
- */
-const getMarketDefinitions = (appSettings: IChainAppSettings | null): MarketDefinition[] => {
-  if (CURRENT_NETWORK_TYPE === 'mainnet') {
-    return DEFAULT_MAINNET_MARKET_PAIRS.map(([quote, base]) => ({
-      groupKey: DEFAULT_MAINNET_MARKET_GROUP,
-      base,
-      quote,
-    }));
-  }
+const MAX_CUSTOM_TRADING_PAIRS = 100;
+
+/** 将通用配置中的市场列表转换为主区展示定义。IMarket.list 使用 [quote, base]。 */
+const getConfiguredMainnetDefinitions = (
+  appSettings: IChainAppSettings | null,
+): MarketDefinition[] => {
+  if (!appSettings?.markets || !Array.isArray(appSettings.markets)) return [];
 
   const definitions: MarketDefinition[] = [];
-  appSettings?.markets?.forEach(market => {
-    market.list?.forEach(([quote, base]) => {
-      definitions.push({ groupKey: market.base.name, base, quote });
+  const seen = new Set<string>();
+  appSettings.markets.forEach(market => {
+    if (!Array.isArray(market?.list)) return;
+    market.list.forEach(pair => {
+      if (!Array.isArray(pair) || pair.length < 2) return;
+      const quote = String(pair[0] || '').trim().toUpperCase();
+      const base = String(pair[1] || '').trim().toUpperCase();
+      const key = `${base}_${quote}`;
+      if (!base || !quote || base === quote || seen.has(key)) return;
+      seen.add(key);
+      definitions.push({ base, quote, groupKey: DEFAULT_MAINNET_MARKET_GROUP });
     });
   });
-  // 配置账户暂时不可用时仍展示主网核心交易对，ticker 继续动态查询。
-  return definitions.length > 0
-    ? definitions
-    : DEFAULT_MAINNET_MARKET_PAIRS.map(([quote, base]) => ({
-      groupKey: DEFAULT_MAINNET_MARKET_GROUP,
-      base,
-      quote,
-    }));
+  return definitions;
+};
+
+/**
+ * 测试网市场来自节点，链上应用配置用于给已有市场分组；主网市场完全由链上配置决定。
+ */
+const getMarketDefinitions = (
+  appSettings: IChainAppSettings | null,
+  customPairs: CustomTradingPair[] = [],
+  chainPairs: { base: string; quote: string }[] = [],
+): MarketDefinition[] => {
+  const definitions: MarketDefinition[] = CURRENT_NETWORK_TYPE === 'mainnet'
+    ? getConfiguredMainnetDefinitions(appSettings)
+    : chainPairs.map(pair => {
+      const configuredGroup = appSettings?.markets?.find(market =>
+        market.list?.some(([quote, base]) => base === pair.base && quote === pair.quote))?.base.name;
+      return { ...pair, groupKey: configuredGroup || DEFAULT_MAINNET_MARKET_GROUP };
+    });
+
+  // 自定义交易对仅保存在本地，但与链上/内置交易对共享行情数据流。
+  const customGroupKey = appSettings?.parameters?.custom_pair_default_groupkey || 'custom';
+  const existing = new Set(definitions.map(({ base, quote }) => `${base}_${quote}`));
+  customPairs.forEach(pair => {
+    const base = pair.baseSymbol.trim().toUpperCase();
+    const quote = pair.quoteSymbol.trim().toUpperCase();
+    const key = `${base}_${quote}`;
+    if (base && quote && base !== quote && !existing.has(key)) {
+      definitions.push({ groupKey: customGroupKey, base, quote });
+      existing.add(key);
+    }
+  });
+
+  return definitions;
 };
 
 // ============================================
@@ -112,6 +141,20 @@ interface MarketState {
   /** 收藏的交易对列表，格式为 "BASE_QUOTE" */
   favorites: string[];
 
+  /** 用户本地添加的交易对 */
+  customPairs: CustomTradingPair[];
+
+  chainPairs: { base: string; quote: string }[];
+  chainMarketsLoaded: boolean;
+  chainMarketsLoading: boolean;
+  chainMarketsError: string | null;
+  chainMarketsUpdatedAt: number;
+  /** null 表示全部报价币种。 */
+  selectedQuoteAsset: string | null;
+  defaultQuoteAsset: string;
+  /** 用户是否手动选择过报价币种；未选择时跟随资产页估值币种。 */
+  quoteAssetSelectionTouched: boolean;
+
   /** 数据是否已加载 */
   isLoaded: boolean;
 
@@ -128,6 +171,9 @@ interface MarketState {
   // ========== Actions ==========
   /** 批量更新 Ticker 数据 */
   updateTickers: (tickers: Map<string, TickerData>) => void;
+  updateChainMarkets: (tickers: Map<string, TickerData>) => void;
+  setSelectedQuoteAsset: (asset: string | null) => void;
+  setDefaultQuoteAsset: (asset: string) => void;
 
   /** 更新单个 Ticker */
   updateTicker: (key: string, ticker: TickerData) => void;
@@ -152,6 +198,15 @@ interface MarketState {
 
   /** 从本地加载收藏列表 */
   loadFavoritesFromCache: () => Promise<void>;
+
+  /** 从本地加载自定义交易对 */
+  loadCustomPairsFromCache: () => Promise<void>;
+
+  /** 添加自定义交易对 */
+  addCustomPair: (baseSymbol: string, quoteSymbol: string) => Promise<boolean>;
+
+  /** 删除自定义交易对 */
+  removeCustomPair: (pairKey: string) => Promise<void>;
 
   /** 重置 store */
   reset: () => void;
@@ -246,6 +301,15 @@ export const useMarketStore = create<MarketState>()((set, get) => ({
   // ========== 初始状态 ==========
   tickerMap: new Map(),
   favorites: [],
+  customPairs: [],
+  chainPairs: [],
+  chainMarketsLoaded: false,
+  chainMarketsLoading: false,
+  chainMarketsError: null,
+  chainMarketsUpdatedAt: 0,
+  selectedQuoteAsset: null,
+  defaultQuoteAsset: CURRENT_NETWORK.defaultQuoteAsset,
+  quoteAssetSelectionTouched: false,
   isLoaded: false,
   selectedCategory: 'favorites',
   sortState: {
@@ -259,6 +323,33 @@ export const useMarketStore = create<MarketState>()((set, get) => ({
     set({ tickerMap: new Map(tickers) });
   },
 
+  updateChainMarkets: (tickers) => {
+    const chainPairs = Array.from(tickers.values(), ticker => ({ base: ticker.base, quote: ticker.quote }));
+    const mergedTickers = new Map(get().tickerMap);
+    tickers.forEach((ticker, key) => mergedTickers.set(key, ticker));
+    const state = get();
+    const preferredQuoteAsset = state.quoteAssetSelectionTouched ? state.selectedQuoteAsset : state.defaultQuoteAsset;
+    set({
+      chainPairs,
+      tickerMap: mergedTickers,
+      chainMarketsLoaded: true,
+      chainMarketsLoading: false,
+      chainMarketsError: null,
+      chainMarketsUpdatedAt: Date.now(),
+      selectedQuoteAsset: chainPairs.some(pair => pair.quote === preferredQuoteAsset) ? preferredQuoteAsset : null,
+    });
+  },
+
+  setSelectedQuoteAsset: (asset) => set({ selectedQuoteAsset: asset, quoteAssetSelectionTouched: true }),
+
+  setDefaultQuoteAsset: (asset) => {
+    set({
+      defaultQuoteAsset: asset,
+      quoteAssetSelectionTouched: false,
+      selectedQuoteAsset: get().chainPairs.some(pair => pair.quote === asset) ? asset : null,
+    });
+  },
+
   updateTicker: (key, ticker) => {
     const { tickerMap } = get();
     const newMap = new Map(tickerMap);
@@ -268,6 +359,75 @@ export const useMarketStore = create<MarketState>()((set, get) => ({
 
   setFavorites: (favorites) => {
     set({ favorites });
+  },
+
+  loadCustomPairsFromCache: async () => {
+    try {
+      const seen = new Set<string>();
+      const customPairs = localCacheManager.loadCustomTradingPairs()
+        .map(pair => {
+          const base = String(pair.baseSymbol || '').trim().toUpperCase();
+          const quote = String(pair.quoteSymbol || '').trim().toUpperCase();
+          return {
+            ...pair,
+            baseSymbol: base,
+            quoteSymbol: quote,
+            pairKey: `${base}_${quote}`,
+          };
+        })
+        .filter(pair => {
+          if (!pair.baseSymbol || !pair.quoteSymbol || pair.baseSymbol === pair.quoteSymbol || seen.has(pair.pairKey)) {
+            return false;
+          }
+          seen.add(pair.pairKey);
+          return true;
+        });
+      set({ customPairs });
+      console.log(`[MarketStore] 从缓存加载了 ${customPairs.length} 个自定义交易对`);
+    } catch (error) {
+      console.error('[MarketStore] 加载自定义交易对失败:', error);
+    }
+  },
+
+  addCustomPair: async (baseSymbol, quoteSymbol) => {
+    const base = baseSymbol.trim().toUpperCase();
+    const quote = quoteSymbol.trim().toUpperCase();
+    if (!base || !quote || base === quote) {
+      return false;
+    }
+
+    const pairKey = `${base}_${quote}`;
+    const { customPairs } = get();
+    const appSettings = useChainConfigStore.getState().appSettings;
+    if (
+      customPairs.some(pair => pair.pairKey === pairKey) ||
+      getMarketDefinitions(appSettings, [], get().chainPairs).some(pair => `${pair.base}_${pair.quote}` === pairKey)
+    ) {
+      return false;
+    }
+    if (customPairs.length >= MAX_CUSTOM_TRADING_PAIRS) {
+      return false;
+    }
+
+    const pair: CustomTradingPair = {
+      pairKey,
+      baseSymbol: base,
+      quoteSymbol: quote,
+      addedAt: Date.now(),
+      lastValidatedAt: Date.now(),
+    };
+    const nextPairs = [...customPairs, pair];
+    localCacheManager.saveCustomTradingPairs(nextPairs);
+    set({ customPairs: nextPairs });
+    return true;
+  },
+
+  removeCustomPair: async (pairKey) => {
+    const nextPairs = get().customPairs.filter(pair => pair.pairKey !== pairKey);
+    const nextFavorites = get().favorites.filter(favorite => favorite !== pairKey);
+    localCacheManager.saveCustomTradingPairs(nextPairs);
+    localCacheManager.saveFavorites(nextFavorites);
+    set({ customPairs: nextPairs, favorites: nextFavorites });
   },
 
   toggleFavorite: async (pairKey) => {
@@ -317,6 +477,15 @@ export const useMarketStore = create<MarketState>()((set, get) => ({
     set({
       tickerMap: new Map(),
       favorites: [],
+      customPairs: [],
+      chainPairs: [],
+      chainMarketsLoaded: false,
+      chainMarketsLoading: false,
+      chainMarketsError: null,
+      chainMarketsUpdatedAt: 0,
+      selectedQuoteAsset: null,
+      defaultQuoteAsset: CURRENT_NETWORK.defaultQuoteAsset,
+      quoteAssetSelectionTouched: false,
       isLoaded: false,
       selectedCategory: 'favorites',
       sortState: { field: 'volume', direction: 'none' },
@@ -327,10 +496,11 @@ export const useMarketStore = create<MarketState>()((set, get) => ({
   getAllPairs: () => {
     // 从 ChainConfigStore 获取 appSettings
     const appSettings = useChainConfigStore.getState().appSettings;
+    const { customPairs, chainPairs } = get();
     const pairsSet = new Set<string>();
     const pairs: { base: string; quote: string }[] = [];
 
-    getMarketDefinitions(appSettings).forEach(({ base, quote }) => {
+    getMarketDefinitions(appSettings, customPairs, chainPairs).forEach(({ base, quote }) => {
       const key = `${base}_${quote}`;
       if (!pairsSet.has(key)) {
         pairsSet.add(key);
@@ -338,7 +508,7 @@ export const useMarketStore = create<MarketState>()((set, get) => ({
       }
     });
 
-    // 添加自选中的交易对（自选的必须在已有的交易对列表中）
+    // 自选列表只用于展示状态；自定义交易对已在上面的定义合并阶段加入。
     // favorites.forEach(pairKey => {
     //   if (!pairsSet.has(pairKey)) {
     //     const [base, quote] = pairKey.split('_');
@@ -364,17 +534,19 @@ export const useComputedMarketList = (): ComputedMarketItem[] => {
   const appSettings = useChainConfigStore(state => state.appSettings);
   const tickerMap = useMarketStore(state => state.tickerMap);
   const favorites = useMarketStore(state => state.favorites);
+  const customPairs = useMarketStore(state => state.customPairs);
+  const chainPairs = useMarketStore(state => state.chainPairs);
 
   return useMemo(() => {
     const items: ComputedMarketItem[] = [];
-    getMarketDefinitions(appSettings).forEach(({ groupKey, base, quote }, index) => {
+    getMarketDefinitions(appSettings, customPairs, chainPairs).forEach(({ groupKey, base, quote }, index) => {
       const tickerKey = `${base}_${quote}`;
       const ticker = tickerMap.get(tickerKey);
       items.push(computeMarketItemFromPair(base, quote, groupKey, ticker, favorites, index));
     });
 
     return items;
-  }, [appSettings, tickerMap, favorites]);
+  }, [appSettings, tickerMap, favorites, customPairs, chainPairs]);
 };
 
 /**
@@ -385,10 +557,12 @@ export const useFavoritesList = (): ComputedMarketItem[] => {
   const appSettings = useChainConfigStore(state => state.appSettings);
   const tickerMap = useMarketStore(state => state.tickerMap);
   const favorites = useMarketStore(state => state.favorites);
+  const customPairs = useMarketStore(state => state.customPairs);
+  const chainPairs = useMarketStore(state => state.chainPairs);
 
   return useMemo(() => {
     const validPairsSet = new Set(
-      getMarketDefinitions(appSettings).map(({ base, quote }) => `${base}_${quote}`)
+      getMarketDefinitions(appSettings, customPairs, chainPairs).map(({ base, quote }) => `${base}_${quote}`)
     );
 
     // 过滤自选列表，只保留链上配置中存在的交易对
@@ -399,7 +573,7 @@ export const useFavoritesList = (): ComputedMarketItem[] => {
         const ticker = tickerMap.get(pairKey);
         return computeMarketItemFromPair(base, quote, 'favorites', ticker, favorites, index);
       });
-  }, [appSettings, tickerMap, favorites]);
+  }, [appSettings, tickerMap, favorites, customPairs, chainPairs]);
 };
 
 /**
@@ -419,16 +593,18 @@ export const useMarketListByGroup = (groupKey: string): ComputedMarketItem[] => 
 export const useMarketGroups = (): MarketGroupInfo[] => {
   const appSettings = useChainConfigStore(state => state.appSettings);
   const marketList = useComputedMarketList();
+  const customPairs = useMarketStore(state => state.customPairs);
+  const chainPairs = useMarketStore(state => state.chainPairs);
 
   return useMemo(() => {
     const groups: MarketGroupInfo[] = [];
-    const groupKeys = [...new Set(getMarketDefinitions(appSettings).map(item => item.groupKey))];
+    const groupKeys = [...new Set(getMarketDefinitions(appSettings, customPairs, chainPairs).map(item => item.groupKey))];
     groupKeys.forEach(groupKey => {
       groups.push({ key: groupKey, name: groupKey, items: marketList.filter(item => item.groupKey === groupKey) });
     });
 
     return groups;
-  }, [appSettings, marketList]);
+  }, [appSettings, marketList, customPairs, chainPairs]);
 };
 
 /**
@@ -440,6 +616,7 @@ export const useFilteredMarketList = (): ComputedMarketItem[] => {
   const selectedCategory = useMarketStore(state => state.selectedCategory);
   const sortState = useMarketStore(state => state.sortState);
   const searchKeyword = useMarketStore(state => state.searchKeyword);
+  const selectedQuoteAsset = useMarketStore(state => state.selectedQuoteAsset);
 
   return useMemo(() => {
     // 1. 根据分类选择列表
@@ -449,6 +626,10 @@ export const useFilteredMarketList = (): ComputedMarketItem[] => {
     } else {
       // 按分组 key 过滤
       filteredList = marketList.filter(item => item.groupKey === selectedCategory);
+    }
+
+    if (selectedQuoteAsset) {
+      filteredList = filteredList.filter(item => item.quoteAsset === selectedQuoteAsset);
     }
 
     // 2. 按搜索关键词过滤
@@ -486,7 +667,7 @@ export const useFilteredMarketList = (): ComputedMarketItem[] => {
     }
 
     return filteredList;
-  }, [marketList, favoritesList, selectedCategory, sortState, searchKeyword]);
+  }, [marketList, favoritesList, selectedCategory, sortState, searchKeyword, selectedQuoteAsset]);
 };
 
 /**
@@ -548,10 +729,11 @@ export const getComputedMarketList = (): ComputedMarketItem[] => {
   const marketState = useMarketStore.getState();
   const chainConfigState = useChainConfigStore.getState();
   const { tickerMap, favorites } = marketState;
+  const { customPairs, chainPairs } = marketState;
   const { appSettings } = chainConfigState;
 
   const items: ComputedMarketItem[] = [];
-  getMarketDefinitions(appSettings).forEach(({ groupKey, base, quote }, index) => {
+  getMarketDefinitions(appSettings, customPairs, chainPairs).forEach(({ groupKey, base, quote }, index) => {
     const tickerKey = `${base}_${quote}`;
     const ticker = tickerMap.get(tickerKey);
     items.push(computeMarketItemFromPair(base, quote, groupKey, ticker, favorites, index));
@@ -568,10 +750,11 @@ export const getFavoritesList = (): ComputedMarketItem[] => {
   const marketState = useMarketStore.getState();
   const chainConfigState = useChainConfigStore.getState();
   const { tickerMap, favorites } = marketState;
+  const { customPairs, chainPairs } = marketState;
   const { appSettings } = chainConfigState;
 
   const validPairsSet = new Set(
-    getMarketDefinitions(appSettings).map(({ base, quote }) => `${base}_${quote}`)
+    getMarketDefinitions(appSettings, customPairs, chainPairs).map(({ base, quote }) => `${base}_${quote}`)
   );
 
   // 过滤自选列表，只保留链上配置中存在的交易对

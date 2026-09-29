@@ -228,6 +228,8 @@ declare module 'bitsharesjs-ws' {
 }
 
 declare module 'bitsharesjs' {
+  export const Serializer: any;
+  export const types: any;
   /**
    * 哈希工具模块
    */
@@ -339,4 +341,11 @@ declare module 'bitsharesjs' {
      */
     unique_nonce_uint64(): string;
   };
+}
+
+declare module 'bitsharesjs/lib/ecc/src/signature' {
+  const Signature: {
+    sign(message: string | Buffer, privateKey: any): { toHex(): string };
+  };
+  export default Signature;
 }

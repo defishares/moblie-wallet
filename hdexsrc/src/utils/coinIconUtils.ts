@@ -27,6 +27,7 @@ const COIN_COLORS = [
 
 // 支持的币种图标映射（全部小写作为 key）
 const COIN_ICONS: Record<string, ImageSourcePropType> = {
+  dfs: require('../assets/icon/coins/DFS.png'),
   aave: require('../assets/icon/coins/AAVE.png'),
   ada: require('../assets/icon/coins/ADA.png'),
   bnb: require('../assets/icon/coins/BNB.png'),
@@ -85,4 +86,3 @@ export function hasCoinIcon(assetName: string): boolean {
   const key = assetName.toLowerCase();
   return key in COIN_ICONS;
 }
-

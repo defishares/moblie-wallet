@@ -62,6 +62,11 @@ export interface Announcement {
   title: string;
   content: string;
   type: 'new_coin' | 'event' | 'news';  // 公告类型
+  enabled?: boolean;
+  sort?: number;
+  publishedAt?: number;
+  /** Unix timestamp in milliseconds; omitted or 0 means no expiry. */
+  expiresAt?: number;
 }
 
 // 用户资产类型
@@ -108,6 +113,18 @@ export interface MarketPairConfig {
   quote: string;         // 计价资产符号，如 USDT
   category: MarketCategory; // 所属分类
   priority?: number;     // 优先级（用于排序）
+}
+
+/**
+ * 用户本地添加的交易对。
+ * 只保存资产符号，资产 ID/精度由当前链节点查询并缓存，避免跨网络复用错误的链上对象。
+ */
+export interface CustomTradingPair {
+  pairKey: string;          // 规范化后的 BASE_QUOTE
+  baseSymbol: string;       // 基础资产（交易标的）
+  quoteSymbol: string;      // 报价资产
+  addedAt: number;
+  lastValidatedAt?: number;
 }
 
 // 链上加载的市场列表配置
@@ -193,6 +210,7 @@ export type RootStackParamList = {
   Login: undefined;                   // 登录页面
   Register: undefined;                // 注册页面
   MainTabs: { screen?: string; params?: { marketItem?: MarketItem } } | undefined;
+  FlashSwap: undefined;
   KLine: { marketItem: MarketItem; source?: KLineSource };  // K线页面参数，source 标识来源
   Settings: undefined;                // 设置页面
   About: undefined;                   // 关于页面
@@ -209,6 +227,11 @@ export type RootStackParamList = {
   Invitation: undefined;              // 邀请计划页面
   DailyCheckin: undefined;            // 每日签到页面
   Lending: undefined;                 // DFS 抵押借贷页面
+  AnnouncementAdmin: undefined;       // 隐藏公告管理入口
+  BSCDeposit: undefined;              // BSC USDT 充值
+  BSCWithdraw: undefined;             // BSC USDT 提现申请
+  BSCHistory: undefined;               // BSC USDT 充值提现历史
+  BSCHistoryDetail: { record: import('../services/gateway_api').BridgeHistoryRecord };
 };
 
 // K线来源类型
@@ -261,6 +284,7 @@ export interface ApiNodeInfo {
   url: string;             // WebSocket URL
   isBuiltin: boolean;      // 是否内置节点
   isChainNode?: boolean;   // 是否链动态节点
+  group?: 'official' | 'community'; // 内置节点分组
   latency?: number;        // 延迟（毫秒）
   isOnline?: boolean;      // 是否在线
 }

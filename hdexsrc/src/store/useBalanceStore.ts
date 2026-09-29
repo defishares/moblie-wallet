@@ -15,6 +15,12 @@ import { useMemo } from 'react';
 import { useMarketStore } from './useMarketStore';
 import type { AssetObject, FullAccountData, LimitOrder, CallOrder, SettleOrder } from '../types';
 import { BTS_NETWORK_CORE_ASSET_ID, CURRENT_NETWORK } from '../config';
+import { getAssetConversionRate } from '../utils/assetConversion';
+import { withLiquidityPoolValuation, type LiquidityPoolValuation } from '../utils/liquidityPoolValuation';
+import { localCacheManager } from '../services/local_cache_mgr';
+
+/** 可用于资产估值的币种列表，按产品要求固定为四种资产。 */
+const VALUATION_ASSETS = ['CNY', 'USD', 'USDT', 'GOLD'] as const;
 
 // ============================================
 // 类型定义
@@ -71,6 +77,11 @@ export interface BalanceItemWithValue extends AssetBalanceDetail {
 }
 
 /**
+ * 根据行情交易对获取两个资产之间的换算汇率。
+ * 支持正向、反向以及通过其他交易对的多跳换算，避免估值币种切换后只有
+ * 恰好存在 BASE_QUOTE 交易对的资产才有价值。
+ */
+/**
  * 余额 Store 状态接口
  */
 interface BalanceState {
@@ -80,6 +91,7 @@ interface BalanceState {
 
     /** 资产详情缓存 Map (assetId -> AssetObject) */
     assetInfoMap: Map<string, AssetObject>;
+    liquidityPoolValuations: Map<string, LiquidityPoolValuation>;
 
     /** 数据是否已加载 */
     isLoaded: boolean;
@@ -107,8 +119,12 @@ interface BalanceState {
     /** 设置估值基础资产 */
     setValuationAsset: (symbol: string) => void;
 
+    /** 从本地缓存恢复用户上次选择的估值资产 */
+    loadValuationAssetFromCache: () => void;
+
     /** 更新资产详情缓存 */
     updateAssetInfoMap: (assets: AssetObject[]) => void;
+    updateLiquidityPoolValuations: (pools: Map<string, LiquidityPoolValuation>) => void;
 
     /** 设置加载状态 */
     setLoaded: (loaded: boolean) => void;
@@ -234,7 +250,7 @@ const calcUserAssetDetailInfos = (
     for (const [assetId, availableAmount] of validBalancesMap.entries()) {
         const assetInfo = assetInfoMap.get(assetId);
         const symbol = assetInfo?.symbol || assetId;
-        const precision = assetInfo?.precision || 5;
+        const precision = assetInfo?.precision ?? 5;
 
         const onOrder = onOrderValues.get(assetId) || BigInt(0);
         const collateral = callOrderValues.get(assetId) || BigInt(0);
@@ -278,6 +294,7 @@ export const useBalanceStore = create<BalanceState>((set, get) => ({
     // ========== 初始状态 ==========
     balanceItems: [],
     assetInfoMap: new Map(),
+    liquidityPoolValuations: new Map(),
     isLoaded: false,
     lastUpdateTime: 0,
     valuationAsset: CURRENT_NETWORK.defaultQuoteAsset,
@@ -307,6 +324,7 @@ export const useBalanceStore = create<BalanceState>((set, get) => ({
     clearBalances: () => {
         set({
             balanceItems: [],
+            liquidityPoolValuations: new Map(),
             isLoaded: false,
             lastUpdateTime: 0,
         });
@@ -314,6 +332,18 @@ export const useBalanceStore = create<BalanceState>((set, get) => ({
 
     setValuationAsset: (symbol) => {
         set({ valuationAsset: symbol });
+        localCacheManager.saveValuationAsset(symbol);
+        useMarketStore.getState().setDefaultQuoteAsset(symbol);
+    },
+
+    loadValuationAssetFromCache: () => {
+        const savedAsset = localCacheManager.loadValuationAsset();
+        if (!savedAsset || !VALUATION_ASSETS.includes(savedAsset as typeof VALUATION_ASSETS[number])) {
+            return;
+        }
+
+        set({ valuationAsset: savedAsset });
+        useMarketStore.getState().setDefaultQuoteAsset(savedAsset);
     },
 
     updateAssetInfoMap: (assets) => {
@@ -323,6 +353,10 @@ export const useBalanceStore = create<BalanceState>((set, get) => ({
             newMap.set(asset.id, asset);
         }
         set({ assetInfoMap: newMap });
+    },
+
+    updateLiquidityPoolValuations: (pools) => {
+        set({ liquidityPoolValuations: new Map(pools) });
     },
 
     setLoaded: (loaded) => {
@@ -342,25 +376,15 @@ export const useBalanceItemsWithValue = (): BalanceItemWithValue[] => {
     const balanceItems = useBalanceStore(state => state.balanceItems);
     const valuationAsset = useBalanceStore(state => state.valuationAsset);
     const tickerMap = useMarketStore(state => state.tickerMap);
+    const liquidityPoolValuations = useBalanceStore(state => state.liquidityPoolValuations);
 
     return useMemo(() => {
+        const valuationRates = withLiquidityPoolValuation(tickerMap, liquidityPoolValuations);
         return balanceItems.map(item => {
-            // 查找对应的 ticker 获取价格
-            // 尝试 SYMBOL/USDT 格式
-            const tickerKey = `${item.symbol}_${valuationAsset}`;
-            const ticker = tickerMap.get(tickerKey);
-
-            let estimatedPrice = 0;
-            let change24h = 0;
-
-            if (ticker) {
-                estimatedPrice = parseFloat(ticker.latest) || 0;
-                change24h = parseFloat(ticker.percent_change) || 0;
-            } else if (item.symbol === valuationAsset) {
-                // 如果是估值资产本身，价格为 1
-                estimatedPrice = 1;
-                change24h = 0;
-            }
+            const estimatedPrice = getAssetConversionRate(item.symbol, valuationAsset, valuationRates);
+            const directTicker = tickerMap.get(`${item.symbol}_${valuationAsset}`)
+                || tickerMap.get(`${valuationAsset}_${item.symbol}`);
+            const change24h = directTicker ? parseFloat(String(directTicker.percent_change)) || 0 : 0;
 
             const estimatedValue = item.total * estimatedPrice;
 
@@ -372,7 +396,7 @@ export const useBalanceItemsWithValue = (): BalanceItemWithValue[] => {
                 color: getAssetColor(item.symbol),
             };
         });
-    }, [balanceItems, valuationAsset, tickerMap]);
+    }, [balanceItems, valuationAsset, tickerMap, liquidityPoolValuations]);
 };
 
 /**
@@ -395,6 +419,8 @@ export const useTotalEstimatedValue = (): number => {
 export const useValuationAsset = (): string => {
     return useBalanceStore(state => state.valuationAsset);
 };
+
+export const useValuationAssets = (): string[] => [...VALUATION_ASSETS];
 
 /**
  * 获取资产余额加载状态
@@ -419,24 +445,16 @@ export const getBalanceItems = (): AssetBalanceDetail[] => {
  */
 export const getBalanceItemsWithValue = (): BalanceItemWithValue[] => {
     const state = useBalanceStore.getState();
-    const { balanceItems, valuationAsset, assetInfoMap } = state;
+    const { balanceItems, valuationAsset, liquidityPoolValuations } = state;
     const marketState = useMarketStore.getState();
     const tickerMap = marketState.tickerMap;
+    const valuationRates = withLiquidityPoolValuation(tickerMap, liquidityPoolValuations);
 
     return balanceItems.map(item => {
-        const tickerKey = `${item.symbol}_${valuationAsset}`;
-        const ticker = tickerMap.get(tickerKey);
-
-        let estimatedPrice = 0;
-        let change24h = 0;
-
-        if (ticker) {
-            estimatedPrice = parseFloat(ticker.latest) || 0;
-            change24h = parseFloat(ticker.percent_change) || 0;
-        } else if (item.symbol === valuationAsset) {
-            estimatedPrice = 1;
-            change24h = 0;
-        }
+        const estimatedPrice = getAssetConversionRate(item.symbol, valuationAsset, valuationRates);
+        const directTicker = tickerMap.get(`${item.symbol}_${valuationAsset}`)
+            || tickerMap.get(`${valuationAsset}_${item.symbol}`);
+        const change24h = directTicker ? parseFloat(String(directTicker.percent_change)) || 0 : 0;
 
         const estimatedValue = item.total * estimatedPrice;
 
@@ -461,4 +479,3 @@ export const getTotalEstimatedValue = (): number => {
 };
 
 export default useBalanceStore;
-

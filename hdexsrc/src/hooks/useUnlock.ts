@@ -6,6 +6,7 @@
 import { useCallback, useState } from 'react';
 import { useAccountStore } from '../store/useAccountStore';
 import { secureStorageService } from '../services/secure_storage_service';
+import { unlockSession } from '../services/unlock_session';
 import { unlockModalManager, type UnlockedKeys } from '../components';
 
 interface UseUnlockOptions {
@@ -27,7 +28,7 @@ interface UseUnlockResult {
   /**
    * 请求解锁（跳转到解锁页面）
    */
-  requestUnlock: () => void;
+  requestUnlock: (options?: { forcePin?: boolean }) => void;
   /**
    * 快速解锁（直接尝试生物认证，不跳转页面）
    */
@@ -68,27 +69,35 @@ interface UseUnlockResult {
  * ```
  */
 export const useUnlock = (options: UseUnlockOptions = {}): UseUnlockResult => {
+  const { onSuccess, onCancel } = options;
   const { currentAccount } = useAccountStore();
   const [isUnlocking, setIsUnlocking] = useState(false);
 
   /**
    * 请求解锁 - 显示解锁弹窗
    */
-  const requestUnlock = useCallback(() => {
+  const requestUnlock = useCallback((requestOptions: { forcePin?: boolean } = {}) => {
     if (!currentAccount) {
       console.warn('[useUnlock] 没有当前账号');
+      return;
+    }
+
+    const cachedKeys = unlockSession.getKeys(currentAccount.id);
+    if (cachedKeys) {
+      onSuccess?.(cachedKeys);
       return;
     }
 
     unlockModalManager.show({
       accountId: currentAccount.id,
       accountName: currentAccount.name,
+      forcePin: requestOptions.forcePin,
       onSuccess: (keys: UnlockedKeys) => {
-        options.onSuccess?.(keys);
+        onSuccess?.(keys);
       },
-      onCancel: options.onCancel,
+      onCancel,
     });
-  }, [currentAccount, options.onSuccess, options.onCancel]);
+  }, [currentAccount, onSuccess, onCancel]);
 
   /**
    * 快速解锁 - 直接尝试生物认证
@@ -103,6 +112,12 @@ export const useUnlock = (options: UseUnlockOptions = {}): UseUnlockResult => {
     setIsUnlocking(true);
 
     try {
+      const cachedKey = unlockSession.getKey(currentAccount.id, 'active');
+      if (cachedKey) {
+        onSuccess?.({ active: cachedKey });
+        return cachedKey;
+      }
+
       // 检查是否启用了生物认证
       const biometricsEnabled = await secureStorageService.isBiometricsEnabled(currentAccount.id);
 
@@ -115,8 +130,8 @@ export const useUnlock = (options: UseUnlockOptions = {}): UseUnlockResult => {
       const result = await secureStorageService.retrievePrivateKeyWithBiometric(currentAccount.id);
 
       if (result.success && result.privateKey) {
-        if (options.onSuccess) {
-          options.onSuccess({ active: result.privateKey });
+        if (onSuccess) {
+          onSuccess({ active: result.privateKey });
         }
         return result.privateKey;
       }
@@ -129,13 +144,13 @@ export const useUnlock = (options: UseUnlockOptions = {}): UseUnlockResult => {
     } finally {
       setIsUnlocking(false);
     }
-  }, [currentAccount, options.onSuccess]);
+  }, [currentAccount, onSuccess]);
 
   /**
    * 检查是否需要解锁（是否有当前账号）
    */
   const checkNeedUnlock = useCallback((): boolean => {
-    return currentAccount !== null;
+    return currentAccount !== null && !unlockSession.isActive(currentAccount.id);
   }, [currentAccount]);
 
   return {

@@ -5,14 +5,29 @@
 
 import { chainServiceMgr } from './chainservice_mgr';
 import { localCacheManager } from './local_cache_mgr';
-import { useMarketStore, getComputedMarketList } from '../store/useMarketStore';
+import { useMarketStore } from '../store/useMarketStore';
+import { syncAnnouncementsFromChain } from '../store/useAppStore';
 import { useChainConfigStore, type ChainStorageItem } from '../store/useChainConfigStore';
 import { useAccountStore } from '../store/useAccountStore';
 import { useBalanceStore } from '../store/useBalanceStore';
 import { useLimitOrderStore } from '../store/useLimitOrderStore';
 import { useOrderBookStore, DEFAULT_BASE_SYMBOL, DEFAULT_QUOTE_SYMBOL } from '../store/useOrderBookStore';
-import { BTS_NETWORK_CORE_ASSET_ID, getOnChainSettingsAccount, kAppStorageCatalogAppSettings } from '../config';
-import type { TickerData, AssetObject } from '../types';
+import {
+  BTS_NETWORK_CORE_ASSET_ID,
+  CURRENT_NETWORK_TYPE,
+  getOnChainSettingsAccount,
+  kAppStorageCatalogAppSettings,
+  kAppStorageKeyAppSettings_CommonVer,
+  kAppStorageKeyMainnetMarkets,
+  ANNOUNCEMENT_ADMIN_ACCOUNT_IDS,
+  kAppStorageKeyAnnouncements,
+  kAppStorageKeyAnnouncementAdmins,
+  setConfiguredAnnouncementAdmins,
+  getConfiguredAnnouncementAdmins,
+} from '../config';
+import type { TickerData, AssetObject, IMarket } from '../types';
+import type { LiquidityPoolValuation } from '../utils/liquidityPoolValuation';
+import { mergeAnnouncementFeeds, parseAnnouncementList, parseAnnouncementAdminList } from '../utils/announcements';
 
 // 更新间隔配置（毫秒）
 const UPDATE_INTERVALS = {
@@ -25,6 +40,44 @@ const UPDATE_INTERVALS = {
 
 // 盘口配置
 const ORDER_BOOK_FETCH_COUNT = 20; // 接口加载数量
+
+/** 解析市场配置，兼容独立 key、通用配置 markets 字段及直接数组格式。 */
+const normalizeMainnetMarkets = (value: unknown): IMarket[] | null => {
+  let decoded = value;
+  if (typeof decoded === 'string') {
+    try { decoded = JSON.parse(decoded); } catch { return null; }
+  }
+  const raw = decoded && typeof decoded === 'object' && !Array.isArray(decoded)
+    ? (decoded as any).markets || (decoded as any).pairs
+    : decoded;
+  if (!Array.isArray(raw)) return null;
+
+  if (raw.every(item => item && typeof item === 'object' && !Array.isArray(item) && item.list)) {
+    const groups = raw
+      .map(item => ({
+        base: { name: String(item.base?.name || item.name || '主网') },
+        list: Array.isArray(item.list) ? item.list : [],
+      }))
+      .filter(item => item.list.length > 0);
+    return groups.length > 0 ? groups : null;
+  }
+
+  const list = raw.filter(item => Array.isArray(item) && item.length >= 2);
+  return list.length > 0 ? [{ base: { name: '主网' }, list }] : null;
+};
+
+const findMainnetMarkets = (feeds: ChainStorageItem[][]): IMarket[] | null => {
+  for (const rows of feeds) {
+    const dedicated = rows.find(item => item.key === kAppStorageKeyMainnetMarkets);
+    const dedicatedMarkets = dedicated && normalizeMainnetMarkets(dedicated.value);
+    if (dedicatedMarkets) return dedicatedMarkets;
+
+    const common = rows.find(item => item.key === kAppStorageKeyAppSettings_CommonVer);
+    const commonMarkets = common && normalizeMainnetMarkets(common.value);
+    if (commonMarkets) return commonMarkets;
+  }
+  return null;
+};
 
 class BackgroundService {
   private static instance: BackgroundService;
@@ -39,6 +92,9 @@ class BackgroundService {
   private orderBookInterval: number = UPDATE_INTERVALS.ORDER_BOOK;
   // 是否正在查询盘口数据
   private isQueryingOrderBook: boolean = false;
+  // 盘口请求序号，防止快速切换交易对时旧请求覆盖新数据
+  private orderBookRequestId: number = 0;
+  private chainMarketRequest: Promise<void> | null = null;
 
   private constructor() { }
 
@@ -214,6 +270,7 @@ class BackgroundService {
    */
   private async updateTickers(): Promise<void> {
     try {
+      await this.refreshChainMarkets();
       const marketStore = useMarketStore.getState();
 
       // 获取所有交易对
@@ -232,13 +289,55 @@ class BackgroundService {
         return;
       }
 
-      // 更新 MarketStore 中的 tickerMap
-      marketStore.updateTickers(tickerMap);
+      // 合并更新，避免某个自定义交易对暂时无流动性/查询失败时清掉其他交易对的缓存行情
+      const mergedTickerMap = new Map(marketStore.tickerMap);
+      tickerMap.forEach((ticker, key) => mergedTickerMap.set(key, ticker));
+      marketStore.updateTickers(mergedTickerMap);
 
       console.log(`[BackgroundService] Ticker 更新完成，共 ${tickerMap.size} 个交易对`);
     } catch (error) {
       console.log('[BackgroundService] Ticker 更新失败:', error);
     }
+  }
+
+  /** Refresh discovery separately from the ten-second price loop. */
+  public refreshChainMarkets(force: boolean = false): Promise<void> {
+    if (this.chainMarketRequest) return this.chainMarketRequest;
+    const state = useMarketStore.getState();
+    if (!force && state.chainMarketsLoaded &&
+      Date.now() - state.chainMarketsUpdatedAt < UPDATE_INTERVALS.MARKET_CONFIG) {
+      return Promise.resolve();
+    }
+
+    // 主网不再通过 get_top_markets 自动发现交易对。主区只展示链上管理员配置的列表；
+    // 配置解析后 getAllPairs 会直接从 appSettings.markets 读取。
+    if (CURRENT_NETWORK_TYPE === 'mainnet') {
+      const configuredPairs = useMarketStore.getState().getAllPairs();
+      useMarketStore.setState({
+        chainPairs: configuredPairs,
+        chainMarketsLoaded: true,
+        chainMarketsLoading: false,
+        chainMarketsError: null,
+        chainMarketsUpdatedAt: Date.now(),
+      });
+      return Promise.resolve();
+    }
+
+    const nodeUrl = chainServiceMgr.getCurrentNodeUrl();
+    useMarketStore.setState({ chainMarketsLoading: true, chainMarketsError: null });
+    this.chainMarketRequest = chainServiceMgr.queryChainMarkets().then(tickers => {
+      if (nodeUrl !== chainServiceMgr.getCurrentNodeUrl()) return;
+      useMarketStore.getState().updateChainMarkets(tickers);
+    }).catch(error => {
+      if (nodeUrl === chainServiceMgr.getCurrentNodeUrl()) {
+        useMarketStore.setState({ chainMarketsError: '市场数据加载失败，请重试' });
+      }
+      console.warn('[BackgroundService] 链上市场发现失败:', error);
+    }).finally(() => {
+      useMarketStore.setState({ chainMarketsLoading: false });
+      this.chainMarketRequest = null;
+    });
+    return this.chainMarketRequest;
   }
 
   // ============================================
@@ -251,13 +350,71 @@ class BackgroundService {
   public async loadChainConfigFromChain(): Promise<ChainStorageItem[] | null> {
     try {
       const settingsAccount = getOnChainSettingsAccount();
-      console.log(`[BackgroundService] 准备从链上加载配置。`);
-
-      // 从链上获取存储信息
-      const storageData = await chainServiceMgr.getStorageInfo(
-        settingsAccount,
-        kAppStorageCatalogAppSettings
+      // 空账号会查询所有账户，因此未设置通用配置账户时跳过该查询。
+      // 公告始终从固定白名单读取，设备上的旧管理员设置不再参与授权。
+      const [settings, ...rootFeeds] = await Promise.all([
+        settingsAccount
+          ? chainServiceMgr.getStorageInfo(settingsAccount, kAppStorageCatalogAppSettings)
+          : Promise.resolve([]),
+        ...ANNOUNCEMENT_ADMIN_ACCOUNT_IDS.map(id =>
+          chainServiceMgr.getStorageInfo(id, kAppStorageCatalogAppSettings)),
+      ]);
+      const configuredAdmins = rootFeeds.flatMap(items => {
+        const entry = items.find((item: ChainStorageItem) => item.key === kAppStorageKeyAnnouncementAdmins);
+        if (!entry) return [];
+        try { return parseAnnouncementAdminList(entry.value); } catch { return []; }
+      });
+      setConfiguredAnnouncementAdmins(configuredAdmins);
+      const dynamicIds = getConfiguredAnnouncementAdmins().map(admin => admin.id);
+      const dynamicFeeds = dynamicIds.length > 0
+        ? await Promise.all(dynamicIds.map(id => chainServiceMgr.getStorageInfo(id, kAppStorageCatalogAppSettings)))
+        : [];
+      const adminFeeds = [...rootFeeds, ...dynamicFeeds];
+      let storageData: ChainStorageItem[] = settings.filter(
+        (item: ChainStorageItem) => item.key !== kAppStorageKeyAnnouncements,
       );
+
+      // 主网市场只使用主网配置账户的链上列表；公告仍按固定管理员名单读取。
+      // 同时兼容 common.settings.ver.v1.markets 及独立 mainnet.markets.v1 两种写法。
+      if (CURRENT_NETWORK_TYPE === 'mainnet') {
+        const mainnetMarkets = findMainnetMarkets([settings]);
+        if (mainnetMarkets) {
+          const commonSource = settings
+            .find((item: ChainStorageItem) => item.key === kAppStorageKeyAppSettings_CommonVer);
+          let commonValue: Record<string, unknown> = {};
+          if (commonSource) {
+            try {
+              const parsed = typeof commonSource.value === 'string'
+                ? JSON.parse(commonSource.value)
+                : commonSource.value;
+              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                commonValue = { ...parsed };
+              }
+            } catch {
+              // 独立市场配置仍可正常使用，无需通用配置的其它字段。
+            }
+          }
+          commonValue.markets = mainnetMarkets;
+          storageData = storageData.filter(item => item.key !== kAppStorageKeyAppSettings_CommonVer);
+          storageData.push({
+            id: commonSource?.id || 'mainnet-markets',
+            account: commonSource?.account || '',
+            catalog: kAppStorageCatalogAppSettings,
+            key: kAppStorageKeyAppSettings_CommonVer,
+            value: commonValue,
+          });
+        }
+      }
+      const feeds = adminFeeds.map((items: ChainStorageItem[]) => {
+        // 查询已经按白名单账号限定；不同节点返回对象的 account 字段可能省略。
+        const source = items.find(item => item.key === kAppStorageKeyAnnouncements);
+        return source ? parseAnnouncementList(source.value) : [];
+      });
+      // 即使列表为空也同步，确保撤下或删除的公告不会继续显示。
+      storageData.push({
+        id: 'announcements', account: '', catalog: kAppStorageCatalogAppSettings,
+        key: kAppStorageKeyAnnouncements, value: mergeAnnouncementFeeds(feeds),
+      });
 
       console.log('[BackgroundService] 链上存储信息:', storageData);
 
@@ -276,17 +433,20 @@ class BackgroundService {
   /**
    * 重新加载链上配置
    */
-  private async reloadChainConfig(): Promise<void> {
+  private async reloadChainConfig(): Promise<boolean> {
     try {
       const storageData = await this.loadChainConfigFromChain();
       if (storageData) {
         const chainConfigStore = useChainConfigStore.getState();
         chainConfigStore.parseChainStorageData(storageData);
+        syncAnnouncementsFromChain();
         console.log('[BackgroundService] 链上配置更新完成');
+        return true;
       }
     } catch (error) {
       console.log('[BackgroundService] 重新加载链上配置失败:', error);
     }
+    return false;
   }
 
   // ============================================
@@ -332,7 +492,7 @@ class BackgroundService {
     localCacheManager.saveLastTradingPair(baseSymbol, quoteSymbol);
 
     // 立即刷新盘口数据
-    await this.updateOrderBook();
+    await this.updateOrderBook(++this.orderBookRequestId);
 
     return true;
   }
@@ -340,7 +500,7 @@ class BackgroundService {
   /**
    * 更新盘口数据
    */
-  private async updateOrderBook(): Promise<void> {
+  private async updateOrderBook(requestId: number = ++this.orderBookRequestId): Promise<void> {
     // 标记正在查询
     this.isQueryingOrderBook = true;
     try {
@@ -359,6 +519,11 @@ class BackgroundService {
         ORDER_BOOK_FETCH_COUNT
       );
 
+      // 如果请求期间用户已经切换到另一交易对，丢弃旧响应。
+      if (requestId !== this.orderBookRequestId) {
+        return;
+      }
+
       if (result.tradingPair) {
         orderBookStore.updateOrderBook(result.orderBook, result.tradingPair);
         console.log(`[BackgroundService] 盘口数据更新完成: ${baseSymbol}/${quoteSymbol}, bids: ${result.orderBook.bids.length}, asks: ${result.orderBook.asks.length}`);
@@ -368,6 +533,9 @@ class BackgroundService {
       }
     } catch (error) {
       console.log('[BackgroundService] 盘口数据更新失败:', error);
+      if (requestId !== this.orderBookRequestId) {
+        return;
+      }
       const orderBookStore = useOrderBookStore.getState();
       orderBookStore.setError('加载失败');
     } finally {
@@ -461,6 +629,9 @@ class BackgroundService {
       }
 
       console.log(`[BackgroundService] 开始更新账号 ${currentAccount.name} 的余额...`);
+      const nodeUrl = chainServiceMgr.getCurrentNodeUrl();
+      const isCurrentAccount = () => useAccountStore.getState().currentAccount?.id === currentAccount.id &&
+        chainServiceMgr.getCurrentNodeUrl() === nodeUrl;
 
       // 获取完整账户信息
       const fullAccountData = await chainServiceMgr.queryFullAccountInfo(currentAccount.id);
@@ -511,8 +682,16 @@ class BackgroundService {
       }
 
       // 更新 BalanceStore
+      if (!isCurrentAccount()) return;
       const balanceStore = useBalanceStore.getState();
       balanceStore.updateFromFullAccount(fullAccountData, assetInfoMap);
+
+      try {
+        const pools = await this.queryLiquidityPoolValuations(assetInfoMap);
+        if (isCurrentAccount()) balanceStore.updateLiquidityPoolValuations(pools);
+      } catch (error) {
+        console.warn('[BackgroundService] LP 估值数据更新失败:', error);
+      }
 
       console.log(`[BackgroundService] 账号余额更新完成`);
     } catch (error) {
@@ -533,7 +712,10 @@ class BackgroundService {
       // 1. 加载收藏列表（本地数据）
       await marketStore.loadFavoritesFromCache();
 
-      // 2. 尝试从内存缓存加载 ticker 数据（用于快速展示）
+      // 2. 加载用户本地自定义交易对，确保后续 ticker 查询包含它们
+      await marketStore.loadCustomPairsFromCache();
+
+      // 3. 尝试从内存缓存加载 ticker 数据（用于快速展示）
       const cachedData = localCacheManager.loadMarketData(false);
       let cachedTickerMap: Map<string, TickerData> | null = null;
       if (cachedData && cachedData.marketList && cachedData.marketList.length > 0) {
@@ -561,7 +743,8 @@ class BackgroundService {
         marketStore.updateTickers(cachedTickerMap);
       }
 
-      // 3. 从链上加载配置
+      // 4. 从链上加载配置
+      await this.refreshChainMarkets(true);
       const storageData = await this.loadChainConfigFromChain();
       if (!storageData) {
         console.log('[BackgroundService] 获取链上配置失败');
@@ -572,17 +755,21 @@ class BackgroundService {
         return false;
       }
 
-      // 4. 解析并存储配置到 ChainConfigStore
+      // 5. 解析并存储配置到 ChainConfigStore
       const chainConfigStore = useChainConfigStore.getState();
       chainConfigStore.parseChainStorageData(storageData);
+      syncAnnouncementsFromChain();
 
-      // 5. 初始化资产缓存
+      // 配置加载后立即同步报价资产选择器使用的主网交易对集合。
+      if (CURRENT_NETWORK_TYPE === 'mainnet') await this.refreshChainMarkets(true);
+
+      // 6. 初始化资产缓存
       await this.initAssetCache();
 
-      // 6. 初始化盘口交易对
+      // 7. 初始化盘口交易对
       this.initializeOrderBookTradingPair();
 
-      // 7. 获取所有交易对的 Ticker
+      // 8. 获取所有交易对的 Ticker
       const pairs = marketStore.getAllPairs();
       console.log(`[BackgroundService] 共 ${pairs.length} 个交易对需要获取 Ticker`);
 
@@ -594,7 +781,7 @@ class BackgroundService {
         }
       }
 
-      // 8. 标记加载完成
+      // 9. 标记加载完成
       marketStore.setLoaded(true);
 
       console.log('[BackgroundService] 市场数据初始化完成');
@@ -618,6 +805,11 @@ class BackgroundService {
       // 1. 获取链动态配置中的所有 symbols
       const chainConfigStore = useChainConfigStore.getState();
       const allSymbols = chainConfigStore.getAllAssetSymbols();
+      // 自定义交易对不在链上 APP 配置中，启动时也纳入资产缓存预热。
+      useMarketStore.getState().customPairs.forEach(pair => {
+        allSymbols.add(pair.baseSymbol);
+        allSymbols.add(pair.quoteSymbol);
+      });
 
       if (allSymbols.size === 0) {
         console.log('[BackgroundService] 链配置中没有资产 symbols，跳过资产缓存初始化');
@@ -658,6 +850,48 @@ class BackgroundService {
   // 手动刷新方法（供外部调用）
   // ============================================
 
+  /** 用当前池储备和 LP 流通量计算份额净值所需数据。 */
+  private async queryLiquidityPoolValuations(
+    assetInfoMap: Map<string, AssetObject>,
+  ): Promise<Map<string, LiquidityPoolValuation>> {
+    const shares = Array.from(assetInfoMap.values()).filter(asset => asset.for_liquidity_pool);
+    const valuations = new Map<string, LiquidityPoolValuation>();
+    if (!shares.length) return valuations;
+
+    const pools = (await chainServiceMgr.getLiquidityPools(
+      shares.map(asset => asset.for_liquidity_pool!), false, false,
+    )).filter(Boolean);
+    const reserveIds = Array.from(new Set<string>(pools.flatMap(pool => [pool.asset_a, pool.asset_b])));
+    const dynamicIds = shares.map(asset => asset.dynamic_asset_data_id).filter((id): id is string => !!id);
+    const [reserveAssets, dynamicObjects] = await Promise.all([
+      reserveIds.length ? chainServiceMgr.getAssets(reserveIds) : Promise.resolve([]),
+      dynamicIds.length ? chainServiceMgr.getObjects(dynamicIds) : Promise.resolve([]),
+    ]);
+    const reservesById = new Map(reserveAssets.filter(Boolean).map(asset => [asset.id, asset]));
+    const supplyById = new Map(dynamicObjects.filter(Boolean).map(object => [object.id, object.current_supply]));
+    const sharesById = new Map(shares.map(asset => [asset.id, asset]));
+
+    for (const pool of pools) {
+      const share = sharesById.get(pool.share_asset);
+      const assetA = reservesById.get(pool.asset_a);
+      const assetB = reservesById.get(pool.asset_b);
+      if (!share?.dynamic_asset_data_id || !assetA || !assetB) continue;
+      // 使用 current_supply；累计存入份额不能代表扣除退出后的 LP 总量。
+      const supply = Number(supplyById.get(share.dynamic_asset_data_id)) / Math.pow(10, share.precision);
+      if (!Number.isFinite(supply) || supply <= 0) continue;
+      valuations.set(share.id, {
+        shareAssetId: share.id,
+        shareSymbol: share.symbol,
+        shareSupply: supply,
+        reserves: [
+          { symbol: assetA.symbol, amount: Number(pool.balance_a) / Math.pow(10, assetA.precision) },
+          { symbol: assetB.symbol, amount: Number(pool.balance_b) / Math.pow(10, assetB.precision) },
+        ],
+      });
+    }
+    return valuations;
+  }
+
   /**
    * 手动刷新 Ticker
    */
@@ -668,8 +902,8 @@ class BackgroundService {
   /**
    * 手动刷新链上配置
    */
-  public async refreshChainConfig(): Promise<void> {
-    await this.reloadChainConfig();
+  public async refreshChainConfig(): Promise<boolean> {
+    return this.reloadChainConfig();
   }
 
   /**

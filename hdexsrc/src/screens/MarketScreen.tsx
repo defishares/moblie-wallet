@@ -10,7 +10,7 @@
  * 5. 点击行跳转到 K 线详情页
  */
 
-import React, { useCallback, useMemo, useEffect, useRef } from 'react';
+import React, { useCallback, useMemo, useEffect, useRef, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -19,6 +19,10 @@ import {
   StatusBar,
   TextInput,
   Image,
+  Modal,
+  Alert,
+  ActivityIndicator,
+  ScrollView,
 } from 'react-native';
 import { Text } from '@rneui/themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -41,8 +45,11 @@ import type {
   RootStackParamList,
 } from '../types';
 import { getCoinIcon, getColorForAsset } from '../utils';
+import { getAssetConversionRate } from '../utils/assetConversion';
 import { CURRENT_NETWORK_TYPE, DEFAULT_MAINNET_MARKET_GROUP } from '../config';
-import { backgroundService } from '../services';
+import { backgroundService, chainServiceMgr } from '../services';
+import { QuoteAssetSelector } from '../components/QuoteAssetSelector';
+import { formatQuotePrice } from '../utils/quoteDisplay';
 
 // 导航类型
 type MarketScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -80,12 +87,25 @@ const MarketScreen: React.FC = () => {
 
   // 从 MarketStore 获取状态和方法
   const selectedCategory = useMarketStore(state => state.selectedCategory);
+  const tickerMap = useMarketStore(state => state.tickerMap);
+  const chainMarketsLoaded = useMarketStore(state => state.chainMarketsLoaded);
+  const chainMarketsLoading = useMarketStore(state => state.chainMarketsLoading);
+  const chainMarketsError = useMarketStore(state => state.chainMarketsError);
+  const selectedQuoteAsset = useMarketStore(state => state.selectedQuoteAsset);
   const sortState = useMarketStore(state => state.sortState);
   const searchKeyword = useMarketStore(state => state.searchKeyword);
   const appSettings = useChainConfigStore(state => state.appSettings);
   const setSelectedCategory = useMarketStore(state => state.setSelectedCategory);
   const setSortState = useMarketStore(state => state.setSortState);
   const setSearchKeyword = useMarketStore(state => state.setSearchKeyword);
+  const customPairs = useMarketStore(state => state.customPairs);
+  const addCustomPair = useMarketStore(state => state.addCustomPair);
+  const removeCustomPair = useMarketStore(state => state.removeCustomPair);
+
+  const [showAddPairModal, setShowAddPairModal] = useState(false);
+  const [baseInput, setBaseInput] = useState('');
+  const [quoteInput, setQuoteInput] = useState('');
+  const [isAddingPair, setIsAddingPair] = useState(false);
 
   // 使用衍生数据 hook 获取过滤后的列表（响应式）
   const filteredList = useFilteredMarketList();
@@ -108,7 +128,7 @@ const MarketScreen: React.FC = () => {
       // 有自选，选中自选
       setSelectedCategory('favorites');
     } else if (CURRENT_NETWORK_TYPE === 'mainnet' || !appSettings?.markets?.length) {
-      // 主网使用内置核心交易对组；其他网络使用链上配置的第一个分组。
+      // 主网使用链上管理员配置的主区；其他网络使用链上配置的第一个分组。
       setSelectedCategory(
         (CURRENT_NETWORK_TYPE === 'mainnet' || !appSettings?.markets?.length
           ? DEFAULT_MAINNET_MARKET_GROUP
@@ -157,9 +177,8 @@ const MarketScreen: React.FC = () => {
       { key: 'favorites', label: '自选' },
     ];
 
-    if (CURRENT_NETWORK_TYPE === 'mainnet' || !appSettings?.markets?.length) {
-      tabs.push({ key: DEFAULT_MAINNET_MARKET_GROUP, label: '主网' });
-    } else if (appSettings?.markets) {
+    tabs.push({ key: DEFAULT_MAINNET_MARKET_GROUP, label: '主区' });
+    if (CURRENT_NETWORK_TYPE !== 'mainnet' && appSettings?.markets) {
       appSettings.markets.forEach(market => {
         const key = market.base.name;
         tabs.push({
@@ -169,8 +188,80 @@ const MarketScreen: React.FC = () => {
       });
     }
 
+    const customGroupKey = appSettings?.parameters?.custom_pair_default_groupkey || 'custom';
+    if (!tabs.some(tab => tab.key === customGroupKey)) {
+      tabs.push({ key: customGroupKey, label: '自定义' });
+    }
+
     return tabs;
   }, [appSettings]);
+
+  const handleAddCustomPair = useCallback(async () => {
+    const base = baseInput.trim().toUpperCase();
+    const quote = quoteInput.trim().toUpperCase();
+
+    if (!base || !quote) {
+      Alert.alert('提示', '请输入基础资产和报价资产');
+      return;
+    }
+    if (base === quote) {
+      Alert.alert('提示', '基础资产和报价资产不能相同');
+      return;
+    }
+
+    const pairKey = `${base}_${quote}`;
+    if (customPairs.length >= 100) {
+      Alert.alert('提示', '最多保存 100 个自定义交易对');
+      return;
+    }
+    const existsInMarket = allMarketList.some(item => `${item.baseAsset}_${item.quoteAsset}` === pairKey);
+    if (existsInMarket) {
+      Alert.alert('提示', '该交易对已经存在');
+      return;
+    }
+
+    setIsAddingPair(true);
+    try {
+      // 只接受当前链上真实存在的资产，资产 ID/精度由节点返回。
+      const assets = await chainServiceMgr.queryAssetsBySymbols([base, quote]);
+      if (!assets.get(base) || !assets.get(quote)) {
+        Alert.alert('添加失败', `未找到资产 ${!assets.get(base) ? base : quote}`);
+        return;
+      }
+
+      const added = await addCustomPair(base, quote);
+      if (!added) {
+        Alert.alert('提示', '该交易对已经存在');
+        return;
+      }
+
+      setBaseInput('');
+      setQuoteInput('');
+      setShowAddPairModal(false);
+      setSelectedCategory(appSettings?.parameters?.custom_pair_default_groupkey || 'custom');
+      // 新交易对加入后立即刷新一次行情，不必等待后台 10 秒轮询。
+      backgroundService.refreshTickers().catch(error => {
+        console.warn('[MarketScreen] 新交易对行情刷新失败:', error);
+      });
+      Alert.alert('添加成功', `${base}/${quote} 已加入自定义交易对`);
+    } catch (error) {
+      console.error('[MarketScreen] 添加自定义交易对失败:', error);
+      Alert.alert('添加失败', '资产查询失败，请检查网络连接后重试');
+    } finally {
+      setIsAddingPair(false);
+    }
+  }, [addCustomPair, allMarketList, appSettings, baseInput, customPairs.length, quoteInput, setSelectedCategory]);
+
+  const handleRemoveCustomPair = useCallback((item: ComputedMarketItem) => {
+    Alert.alert('删除交易对', `确定删除 ${item.symbol}？`, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => removeCustomPair(`${item.baseAsset}_${item.quoteAsset}`),
+      },
+    ]);
+  }, [removeCustomPair]);
 
   // 处理排序点击
   const handleSortPress = useCallback((field: SortField) => {
@@ -199,7 +290,7 @@ const MarketScreen: React.FC = () => {
       baseAsset: item.baseAsset,
       quoteAsset: item.quoteAsset,
       price: item.price,
-      priceUsd: item.price,
+      priceUsd: item.price * getAssetConversionRate(item.quoteAsset, 'USD', tickerMap),
       change24h: item.change24h,
       volume24h: item.volume24h,
       volume24hDisplay: item.volume24hDisplay,
@@ -214,7 +305,7 @@ const MarketScreen: React.FC = () => {
       isFavorite: item.isFavorite,
     };
     navigation.navigate('KLine', { marketItem });
-  }, [navigation]);
+  }, [navigation, tickerMap]);
 
   // 渲染搜索栏
   const renderSearchBar = () => (
@@ -233,12 +324,20 @@ const MarketScreen: React.FC = () => {
           <Text style={styles.hotIcon}>🔥</Text>
         )}
       </View>
+      <TouchableOpacity
+        style={styles.addPairButton}
+        onPress={() => setShowAddPairModal(true)}
+        accessibilityLabel="添加自定义交易对"
+      >
+        <Icon name="plus" size={24} color="#00D094" />
+      </TouchableOpacity>
     </View>
   );
 
   // 渲染分类 Tab
   const renderCategoryTabs = () => (
     <View style={styles.tabsContainer}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll}>
       {categoryTabs.map((tab) => (
         <TouchableOpacity
           key={tab.key}
@@ -259,6 +358,8 @@ const MarketScreen: React.FC = () => {
           {selectedCategory === tab.key && <View style={styles.tabIndicator} />}
         </TouchableOpacity>
       ))}
+      </ScrollView>
+      <QuoteAssetSelector />
     </View>
   );
 
@@ -386,7 +487,7 @@ const MarketScreen: React.FC = () => {
         {/* 最新价 - 右对齐 */}
         <View style={[styles.itemCell, { flex: 1, alignItems: 'flex-end' }]}>
           <Text style={styles.priceText}>{formatPrice(item.price)}</Text>
-          <Text style={styles.priceUsdText}>${formatPrice(item.price)}</Text>
+          <Text style={styles.priceUsdText}>{formatQuotePrice(item.price, item.quoteAsset, formatPrice)}</Text>
         </View>
 
         {/* 涨跌幅 - 右对齐 */}
@@ -402,6 +503,15 @@ const MarketScreen: React.FC = () => {
             </Text>
           </View>
         </View>
+        {customPairs.some(pair => pair.pairKey === `${item.baseAsset}_${item.quoteAsset}`) && (
+          <TouchableOpacity
+            style={styles.removePairButton}
+            onPress={() => handleRemoveCustomPair(item)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Icon name="close-circle-outline" size={18} color="#666666" />
+          </TouchableOpacity>
+        )}
       </TouchableOpacity>
     );
   };
@@ -409,10 +519,20 @@ const MarketScreen: React.FC = () => {
   // 渲染空列表提示
   const renderEmptyList = () => (
     <View style={styles.emptyContainer}>
-      <Icon name="chart-line" size={48} color="#333333" />
+      {chainMarketsLoading && !chainMarketsLoaded
+        ? <ActivityIndicator size="large" color="#00D094" />
+        : <Icon name="chart-line" size={48} color="#333333" />}
       <Text style={styles.emptyText}>
-        {selectedCategory === 'favorites' ? '暂无自选' : '暂无数据'}
+        {chainMarketsLoading && !chainMarketsLoaded ? '正在加载链上市场...' :
+          chainMarketsError && !chainMarketsLoaded ? chainMarketsError :
+          selectedCategory === 'favorites' ? '暂无自选' :
+          selectedQuoteAsset ? `暂无 ${selectedQuoteAsset} 交易对` : '暂无交易对'}
       </Text>
+      {chainMarketsError && !chainMarketsLoading && (
+        <TouchableOpacity onPress={() => backgroundService.refreshChainMarkets(true)}>
+          <Text style={styles.emptySubText}>点击重试</Text>
+        </TouchableOpacity>
+      )}
       {selectedCategory === 'favorites' && (
         <Text style={styles.emptySubText}>
           去其他分类添加自选吧
@@ -442,7 +562,64 @@ const MarketScreen: React.FC = () => {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={renderEmptyList}
+        refreshing={chainMarketsLoading && chainMarketsLoaded}
+        onRefresh={() => backgroundService.refreshChainMarkets(true)}
       />
+
+      <Modal
+        visible={showAddPairModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAddPairModal(false)}
+      >
+        <View style={styles.addPairOverlay}>
+          <View style={styles.addPairCard}>
+            <View style={styles.addPairHeader}>
+              <Text style={styles.addPairTitle}>添加自定义交易对</Text>
+              <TouchableOpacity onPress={() => setShowAddPairModal(false)}>
+                <Icon name="close" size={22} color="#888888" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.addPairHint}>请输入当前链上存在的资产符号</Text>
+            <TextInput
+              style={styles.pairInput}
+              placeholder="基础资产，例如 DFS"
+              placeholderTextColor="#666666"
+              autoCapitalize="characters"
+              value={baseInput}
+              onChangeText={setBaseInput}
+            />
+            <TextInput
+              style={styles.pairInput}
+              placeholder="报价资产，例如 USDT"
+              placeholderTextColor="#666666"
+              autoCapitalize="characters"
+              value={quoteInput}
+              onChangeText={setQuoteInput}
+            />
+            <View style={styles.addPairActions}>
+              <TouchableOpacity
+                style={styles.cancelPairButton}
+                onPress={() => setShowAddPairModal(false)}
+                disabled={isAddingPair}
+              >
+                <Text style={styles.cancelPairText}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.confirmPairButton}
+                onPress={handleAddCustomPair}
+                disabled={isAddingPair}
+              >
+                {isAddingPair ? (
+                  <ActivityIndicator size="small" color="#06130F" />
+                ) : (
+                  <Text style={styles.confirmPairText}>添加</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -455,16 +632,28 @@ const styles = StyleSheet.create({
 
   // 搜索栏样式
   searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
   searchInputWrapper: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#1A1A1A',
     borderRadius: 24,
     paddingHorizontal: 16,
     height: 44,
+  },
+  addPairButton: {
+    width: 44,
+    height: 44,
+    marginLeft: 8,
+    borderRadius: 22,
+    backgroundColor: '#12251F',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   searchIcon: {
     marginRight: 8,
@@ -483,9 +672,11 @@ const styles = StyleSheet.create({
   // 分类 Tab 样式
   tabsContainer: {
     flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 16,
     marginBottom: 8,
   },
+  categoryScroll: { flex: 1 },
   tabItem: {
     marginRight: 32,
     paddingBottom: 10,
@@ -574,6 +765,11 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#1A1A1A',
+  },
+  removePairButton: {
+    marginLeft: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   itemCell: {
     justifyContent: 'center',
@@ -667,6 +863,74 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#444444',
     marginTop: 8,
+  },
+
+  // 添加自定义交易对弹窗
+  addPairOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  addPairCard: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 14,
+    padding: 20,
+  },
+  addPairHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  addPairTitle: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  addPairHint: {
+    color: '#888888',
+    fontSize: 12,
+    marginTop: 8,
+    marginBottom: 16,
+  },
+  pairInput: {
+    height: 46,
+    borderRadius: 8,
+    backgroundColor: '#252525',
+    color: '#FFFFFF',
+    paddingHorizontal: 14,
+    marginBottom: 12,
+    fontSize: 15,
+  },
+  addPairActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 8,
+  },
+  cancelPairButton: {
+    minWidth: 80,
+    height: 42,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  cancelPairText: {
+    color: '#AAAAAA',
+    fontSize: 15,
+  },
+  confirmPairButton: {
+    minWidth: 80,
+    height: 42,
+    borderRadius: 8,
+    backgroundColor: '#00D094',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmPairText: {
+    color: '#06130F',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
 

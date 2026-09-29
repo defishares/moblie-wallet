@@ -21,6 +21,12 @@ import {
   InvitationScreen,
   DailyCheckinScreen,
   LendingScreen,
+  FlashSwapScreen,
+  AnnouncementAdminScreen,
+  BSCDepositScreen,
+  BSCWithdrawScreen,
+  BSCHistoryScreen,
+  BSCHistoryDetailScreen,
 } from '../screens';
 import TabNavigator from './TabNavigator';
 import type { RootStackParamList } from '../types';
@@ -115,6 +121,16 @@ const AppNavigator: React.FC = () => {
           }}
         />
 
+        {/* 首页快捷操作中的闪兑入口 */}
+        <Stack.Screen
+          name="FlashSwap"
+          component={FlashSwapScreen}
+          options={{
+            gestureEnabled: true,
+            ...fastSlideAnimation,
+          }}
+        />
+
         {/* K线详情页 - 从市场列表点击进入 */}
         <Stack.Screen
           name="KLine"
@@ -193,6 +209,31 @@ const AppNavigator: React.FC = () => {
             gestureEnabled: true,
             ...fastSlideAnimation,
           }}
+        />
+        <Stack.Screen
+          name="AnnouncementAdmin"
+          component={AnnouncementAdminScreen}
+          options={{ gestureEnabled: true, ...fastSlideAnimation }}
+        />
+        <Stack.Screen
+          name="BSCDeposit"
+          component={BSCDepositScreen}
+          options={{ gestureEnabled: true, ...fastSlideAnimation }}
+        />
+        <Stack.Screen
+          name="BSCWithdraw"
+          component={BSCWithdrawScreen}
+          options={{ gestureEnabled: true, ...fastSlideAnimation }}
+        />
+        <Stack.Screen
+          name="BSCHistory"
+          component={BSCHistoryScreen}
+          options={{ gestureEnabled: true, ...fastSlideAnimation }}
+        />
+        <Stack.Screen
+          name="BSCHistoryDetail"
+          component={BSCHistoryDetailScreen}
+          options={{ gestureEnabled: true, ...fastSlideAnimation }}
         />
       </Stack.Navigator>
     </NavigationContainer>

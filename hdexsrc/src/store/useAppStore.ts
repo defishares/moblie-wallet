@@ -14,6 +14,9 @@ import {
   TabType,
 } from '../types';
 import { backgroundService } from '../services/background_service';
+import { kAppStorageKeyAnnouncements } from '../config';
+import { useChainConfigStore } from './useChainConfigStore';
+import { parseAnnouncementList } from '../utils/announcements';
 
 // 应用状态接口
 interface AppState {
@@ -92,22 +95,6 @@ const mockCryptoAssets: CryptoAsset[] = [
     priceUsd: 106.04,
     change24h: -1.09,
     color: '#2D60E0',
-  },
-];
-
-// 模拟公告数据
-const mockAnnouncements: Announcement[] = [
-  {
-    id: '1',
-    title: '新币上线',
-    content: 'RWA资产VIH：交易RWA资产VIH并瓜分20万枚USDT奖池。',
-    type: 'new_coin',
-  },
-  {
-    id: '2',
-    title: '活动公告',
-    content: '参与交易大赛，赢取丰厚奖励！',
-    type: 'event',
   },
 ];
 
@@ -223,9 +210,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       // 1. 初始化市场数据（通过 backgroundService）
       await backgroundService.initializeMarketData();
       
-      // 2. 加载其他模拟数据（公告、资产等）
+      // 2. 加载其他本地演示数据（公告只使用链上数据）
       setCryptoAssets(mockCryptoAssets);
-      setAnnouncements(mockAnnouncements);
+      // 不再使用历史静态公告兜底。链上公告读取失败时保持空列表，
+      // 避免把过期内容误显示成当前公告。
+      setAnnouncements([]);
+      syncAnnouncementsFromChain();
       setUserHoldings(mockUserHoldings);
       
       // 3. 计算总资产价值
@@ -243,3 +233,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 }));
+
+// 将链上公告同步到首页；没有有效链上公告时清空首页公告。
+export const syncAnnouncementsFromChain = (): void => {
+  const raw = useChainConfigStore.getState().chainConfigMap.get(kAppStorageKeyAnnouncements);
+  if (!Array.isArray(raw)) {
+    useAppStore.getState().setAnnouncements([]);
+    return;
+  }
+  try {
+    useAppStore.getState().setAnnouncements(parseAnnouncementList(raw)
+      .filter(item => item.enabled !== false && (!item.expiresAt || item.expiresAt > Date.now())));
+  } catch (error) {
+    console.warn('[Store] 链上公告格式无效，已清空首页公告:', error);
+    useAppStore.getState().setAnnouncements([]);
+  }
+};

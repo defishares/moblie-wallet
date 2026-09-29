@@ -125,6 +125,8 @@ const KLineScreen: React.FC = () => {
   const [isFavorite, setIsFavorite] = useState(marketItem.isFavorite);
   const [klineDataState, setKlineDataState] = useState<any[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(true);
+  // WebView 可能在首次请求完成后才触发 onLoad，因此单独记录状态，避免“无数据”消息被初始化脚本覆盖成“加载中”。
+  const klineStatusRef = useRef<'loading' | 'ready' | 'empty' | 'error'>('loading');
 
   // 底部 Tab 状态
   const [activeBottomTab, setActiveBottomTab] = useState<BottomTabType>('orderbook');
@@ -161,8 +163,8 @@ const KLineScreen: React.FC = () => {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 缓存资产精度
-  const assetPrecisionCache = useRef<Map<string, number>>(new Map());
-  const assetIdCache = useRef<Map<string, string>>(new Map());
+  // 按交易对缓存资产信息，不能使用全局 baseId/quoteId，否则切换自定义交易对后会串用上一对资产。
+  const assetPairCache = useRef<Map<string, { base: number; quote: number; baseId: string; quoteId: string }>>(new Map());
 
   // 从amount和精度计算BigDecimal（等同于Kotlin的bigDecimalfromAmount）
   const bigDecimalFromAmount = useCallback((amount: string, precision: number): BigNumber => {
@@ -172,14 +174,10 @@ const KLineScreen: React.FC = () => {
 
   // 获取资产精度
   const getAsset = useCallback(async (baseSymbol: string, quoteSymbol: string): Promise<{ base: number, quote: number, baseId: string, quoteId: string }> => {
-    // 检查缓存
-    const basePrecision = assetPrecisionCache.current.get(baseSymbol);
-    const quotePrecision = assetPrecisionCache.current.get(quoteSymbol);
-    const _baseId = assetIdCache.current.get("baseId")?.toString();
-    const _quoteId = assetIdCache.current.get("quoteId")?.toString();
-
-    if (basePrecision !== undefined && quotePrecision !== undefined && _baseId !== undefined && _quoteId !== undefined) {
-      return { base: basePrecision, quote: quotePrecision, baseId: _baseId, quoteId: _quoteId };
+    const pairKey = `${baseSymbol}_${quoteSymbol}`;
+    const cached = assetPairCache.current.get(pairKey);
+    if (cached) {
+      return cached;
     }
 
     // 查询资产信息
@@ -198,14 +196,12 @@ const KLineScreen: React.FC = () => {
     }
 
     // 缓存精度
-    assetPrecisionCache.current.set(baseSymbol, baseAsset.precision);
-    assetPrecisionCache.current.set(quoteSymbol, quoteAsset.precision);
-    assetIdCache.current.set("baseId", baseId);
-    assetIdCache.current.set("quoteId", quoteId);
+    const result = { base: baseAsset.precision, quote: quoteAsset.precision, baseId: baseAsset.id, quoteId: quoteAsset.id };
+    assetPairCache.current.set(pairKey, result);
 
     console.log(`[base/quote 资产信息] ${baseSymbol}: ${baseAsset.precision}, ${quoteSymbol}: ${quoteAsset.precision}`);
 
-    return { base: baseAsset.precision, quote: quoteAsset.precision, baseId: baseAsset.id, quoteId: quoteAsset.id };
+    return result;
   }, []);
 
   // 解析单根K线数据（参考MKlineItemData.kt的parseData逻辑）
@@ -480,7 +476,8 @@ const KLineScreen: React.FC = () => {
       const { bucketSeconds, start, end } = calculateTimeRange(klineInterval, isIncremental);
       console.log("[--------------- 获取行情参数]", baseSymbol, quoteSymbol,"isIncremental:", isIncremental, "start:", start, "end:", end, "bucketSeconds:", bucketSeconds);
 
-      const data = await chainServiceMgr.getMarketHistory(baseSymbol, quoteSymbol, bucketSeconds, start, end);
+      // history API 接收资产 ID，不是资产符号；ticker/盘口接口才使用 symbol。
+      const data = await chainServiceMgr.getMarketHistory(baseId, quoteId, bucketSeconds, start, end);
       const callEndTime = Date.now();
       const callDuration = callEndTime - callStartTime;
 
@@ -513,6 +510,7 @@ const KLineScreen: React.FC = () => {
         });
         console.log('==========================================');
         setKlineDataState(formattedData);
+        klineStatusRef.current = formattedData.length > 0 ? 'ready' : 'empty';
 
         // 发送全量数据到 WebView
         if (webViewRef.current) {
@@ -548,6 +546,7 @@ const KLineScreen: React.FC = () => {
 
     } catch (error) {
       console.error('[错误] 获取K线数据失败:', error);
+      klineStatusRef.current = 'error';
       // 错误时也要继续轮询（仅当组件未卸载时）
       if (isMountedRef.current) {
         if (timerRef.current) {
@@ -577,7 +576,18 @@ const KLineScreen: React.FC = () => {
     if (klineDataState.length > 0) {
       sendDataToWebView(klineDataState, klineInterval, false);
     } else {
-      console.log('[等待数据] WebView已加载，等待K线数据...');
+      const loadingText = klineStatusRef.current === 'empty'
+        ? '暂无K线数据'
+        : klineStatusRef.current === 'error'
+          ? 'K线加载失败'
+          : '加载中...';
+      console.log('[WebView] 加载完成，发送状态:', loadingText);
+      if (webViewRef.current) {
+        webViewRef.current.postMessage(JSON.stringify({
+          type: 'UPDATE_LOADING_TEXT',
+          text: loadingText,
+        }));
+      }
     }
   }, [klineDataState, klineInterval, sendDataToWebView]);
 
@@ -653,6 +663,7 @@ const KLineScreen: React.FC = () => {
   useEffect(() => {
     console.log('[启动] K线数据轮询');
     setIsDataLoading(true);
+    klineStatusRef.current = 'loading';
 
     // 切换盘口交易对到当前 K 线的交易对
     const baseSymbol = marketItem.symbol.split('/')[0];
@@ -690,8 +701,9 @@ const KLineScreen: React.FC = () => {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    // 重置为全量加载
-    isFirstLoadRef.current = true;
+        // 重置为全量加载
+        isFirstLoadRef.current = true;
+        klineStatusRef.current = 'loading';
     isCallingRef.current = false;
     // 立即获取新周期的数据
     fetchKlineData();
@@ -780,6 +792,7 @@ const KLineScreen: React.FC = () => {
         </Text>
         <View style={styles.priceSubRow}>
           <Text style={styles.priceUsd}>${formatPrice(marketItem.priceUsd)}</Text>
+          <Text style={styles.priceChangePeriod}>24h</Text>
           <Text style={[styles.priceChange, { color: priceColor }]}>
             {isPositive ? '+' : ''}{marketItem.change24h.toFixed(2)}%
           </Text>
@@ -1290,6 +1303,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
   },
+  priceChangePeriod: {
+    fontSize: 11,
+    color: '#666666',
+    marginRight: 4,
+  },
   priceRight: {
     flex: 1,
     paddingLeft: 16,
@@ -1674,4 +1692,3 @@ const styles = StyleSheet.create({
 });
 
 export default KLineScreen;
-

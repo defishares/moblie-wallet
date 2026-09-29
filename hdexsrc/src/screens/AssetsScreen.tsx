@@ -10,6 +10,7 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  Modal,
   StatusBar,
   FlatList,
   RefreshControl,
@@ -25,12 +26,13 @@ import {
   useBalanceItemsWithValue,
   useTotalEstimatedValue,
   useValuationAsset,
+  useValuationAssets,
+  useBalanceStore,
   useBalanceLoaded,
   type BalanceItemWithValue,
 } from '../store/useBalanceStore';
 import { backgroundService } from '../services/background_service';
 import type { RootStackParamList } from '../types';
-import { Toast } from '../components/Toast';
 import { getCoinIcon, getColorForAsset } from '../utils';
 
 type AssetsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -40,6 +42,7 @@ const quickActions = [
   { id: 'deposit', icon: 'arrow-down', label: '充值' },
   { id: 'withdraw', icon: 'arrow-up', label: '提现' },
   { id: 'transfer', icon: 'swap-horizontal', label: '转账' },
+  { id: 'history', icon: 'history', label: '充提查询' },
   { id: 'lending', icon: 'bank-outline', label: '借贷' },
 ];
 
@@ -50,12 +53,15 @@ const AssetsScreen: React.FC = () => {
   const balanceItems = useBalanceItemsWithValue();
   const totalValue = useTotalEstimatedValue();
   const valuationAsset = useValuationAsset();
+  const valuationAssets = useValuationAssets();
+  const setValuationAsset = useBalanceStore(state => state.setValuationAsset);
   const isLoaded = useBalanceLoaded();
 
   // 是否显示资产
   const [showBalance, setShowBalance] = useState(true);
   // 刷新状态
   const [refreshing, setRefreshing] = useState(false);
+  const [valuationPickerVisible, setValuationPickerVisible] = useState(false);
 
   // 下拉刷新处理
   const onRefresh = useCallback(async () => {
@@ -76,11 +82,16 @@ const AssetsScreen: React.FC = () => {
         navigation.navigate('Transfer', {});
         break;
       case 'deposit':
+        navigation.navigate('BSCDeposit');
+        break;
       case 'withdraw':
-        Toast.show('敬请期待');
+        navigation.navigate('BSCWithdraw');
         break;
       case 'lending':
         navigation.navigate('Lending');
+        break;
+      case 'history':
+        navigation.navigate('BSCHistory');
         break;
     }
   };
@@ -106,7 +117,12 @@ const AssetsScreen: React.FC = () => {
         <Text style={styles.balanceAmount}>
           {showBalance ? totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '****'}
         </Text>
-        <TouchableOpacity style={styles.currencySelector}>
+        <TouchableOpacity
+          style={styles.currencySelector}
+          onPress={() => setValuationPickerVisible(true)}
+          accessibilityRole="button"
+          accessibilityLabel="选择估值资产"
+        >
           <Text style={styles.balanceCurrency}>{valuationAsset}</Text>
           <Icon name="chevron-down" size={16} color="#888888" />
         </TouchableOpacity>
@@ -270,6 +286,38 @@ const AssetsScreen: React.FC = () => {
         {/* 资产列表 */}
         {renderAssetList()}
       </ScrollView>
+
+      <Modal
+        visible={valuationPickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setValuationPickerVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.valuationModalBackdrop}
+          activeOpacity={1}
+          onPress={() => setValuationPickerVisible(false)}
+        >
+          <View style={styles.valuationModalCard}>
+            <Text style={styles.valuationModalTitle}>选择估值资产</Text>
+            <ScrollView style={styles.valuationOptionList} showsVerticalScrollIndicator={false}>
+              {valuationAssets.map(asset => (
+                <TouchableOpacity
+                  key={asset}
+                  style={styles.valuationOption}
+                  onPress={() => {
+                    setValuationAsset(asset);
+                    setValuationPickerVisible(false);
+                  }}
+                >
+                  <Text style={styles.valuationOptionText}>{asset}</Text>
+                  {asset === valuationAsset && <Icon name="check" size={20} color="#00D094" />}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -317,6 +365,40 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginLeft: 8,
+  },
+  valuationModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+  },
+  valuationModalCard: {
+    maxHeight: '70%',
+    backgroundColor: '#1A1A1A',
+    borderRadius: 16,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+  },
+  valuationModalTitle: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  valuationOptionList: {
+    maxHeight: 360,
+  },
+  valuationOption: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#333333',
+  },
+  valuationOptionText: {
+    color: '#F1F5F3',
+    fontSize: 16,
   },
   balanceCurrency: {
     fontSize: 14,

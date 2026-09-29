@@ -828,7 +828,10 @@
                     firstItem: data[0],
                     lastItem: data[data.length - 1]
                 });
-                
+
+                // 切换周期或交易对后先显示状态提示；否则上一次有数据时 loading 已被隐藏，空结果会看起来像卡住。
+                document.getElementById('loading').style.display = 'flex';
+                 
                 // 如果收到空数据，立即清空并返回
                 if (!data || data.length === 0) {
                     console.log('[WebView] 收到空数据，清空画布');
@@ -839,6 +842,7 @@
                         macd: { dif: [], dea: [], macd: [] }
                     };
                     this.currentInterval = interval;
+                    document.getElementById('loading').innerText = '暂无K线数据';
                     this.draw(); // 这会清空画布
                     return;
                 }

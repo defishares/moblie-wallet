@@ -21,6 +21,7 @@ const generateBuiltinNodes = (): ApiNodeInfo[] => {
     id: `${BUILTIN_NODE_PREFIX}${index}`,
     name: node.name,
     url: node.url,
+    group: node.group,
     isBuiltin: true,
     isChainNode: false,
   }));
@@ -34,6 +35,7 @@ const generateChainNodes = (chainNodes: WsNodeConfig[]): ApiNodeInfo[] => {
     id: `${CHAIN_NODE_PREFIX}${index}`,
     name: node.name,
     url: node.url,
+    group: node.group,
     isBuiltin: false,
     isChainNode: true,
   }));
@@ -344,4 +346,3 @@ export const useApiNodeStore = create<ApiNodeState>((set, get) => ({
 }));
 
 export default useApiNodeStore;
-

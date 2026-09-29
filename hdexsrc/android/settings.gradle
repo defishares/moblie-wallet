@@ -32,6 +32,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = 'HdexApp'
+rootProject.name = 'DefiShares'
 include ':app'
 includeBuild('../node_modules/@react-native/gradle-plugin')

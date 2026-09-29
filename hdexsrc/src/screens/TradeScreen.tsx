@@ -621,6 +621,8 @@ const TradeScreen: React.FC = () => {
       if (!price || isNaN(priceNum) || priceNum <= 0) {
         return '请输入有效的价格';
       }
+    } else if (!currentMarket?.price || currentMarket.price <= 0) {
+      return '当前交易对暂无有效行情，请使用限价委托';
     }
 
     // 检查余额
@@ -660,6 +662,9 @@ const TradeScreen: React.FC = () => {
       if (orderType === 'market') {
         // 市价单：使用当前 ticker 价格的极端值确保成交
         const tickerPrice = currentMarket?.price || 0;
+        if (tickerPrice <= 0) {
+          throw new Error('当前交易对暂无有效行情，无法提交市价单');
+        }
         if (tradeDirection === 'buy') {
           // 买入用当前价格的 200%（2倍）
           orderPrice = tickerPrice * 2;

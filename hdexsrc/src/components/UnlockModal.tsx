@@ -22,6 +22,7 @@ import {
 import { Text } from '@rneui/themed';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { secureStorageService } from '../services/secure_storage_service';
+import { unlockSession } from '../services/unlock_session';
 import type { BiometricType } from '../types';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -33,6 +34,7 @@ export type UnlockedKeys = { [key: string]: string | undefined };
 interface UnlockModalConfig {
   accountId: string;
   accountName: string;
+  forcePin?: boolean;
   onSuccess: (keys: UnlockedKeys) => void;
   onCancel?: () => void;
 }
@@ -64,6 +66,11 @@ class UnlockModalManager {
   }
 
   show(config: UnlockModalConfig) {
+    const keys = unlockSession.getKeys(config.accountId);
+    if (keys) {
+      config.onSuccess(keys);
+      return;
+    }
     if (this.showCallback) {
       this.showCallback(config);
     }
@@ -113,6 +120,7 @@ export const UnlockModalContainer: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [pinCode, setPinCode] = useState('');
   const [showPinCode, setShowPinCode] = useState(false);
+  const [pinVisible, setPinVisible] = useState(false);
   const [isPinLoading, setIsPinLoading] = useState(false);
   const [, setBiometricFailures] = useState(0);
 
@@ -129,6 +137,7 @@ export const UnlockModalContainer: React.FC = () => {
     // 重置状态
     setErrorMessage('');
     setPinCode('');
+    setPinVisible(false);
     setShowPinCode(false);
     setIsBiometricLoading(false);
     setIsPinLoading(false);
@@ -142,7 +151,12 @@ export const UnlockModalContainer: React.FC = () => {
     });
 
     // 初始化生物认证状态
-    initializeBiometrics(config.accountId);
+    if (config.forcePin) {
+      setShowPinCode(true);
+      setIsInitialized(true);
+    } else {
+      initializeBiometrics(config.accountId);
+    }
 
     // 弹出动画
     slideAnim.setValue(MODAL_HEIGHT);
@@ -152,6 +166,9 @@ export const UnlockModalContainer: React.FC = () => {
       tension: 65,
       friction: 11,
     }).start();
+  // initializeBiometrics is intentionally kept outside this callback; it is an
+  // imperative modal action and should not recreate the manager callback.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slideAnim]);
 
   // 隐藏弹窗
@@ -188,13 +205,13 @@ export const UnlockModalContainer: React.FC = () => {
       // 检查账号是否启用了生物认证
       const enabled = await secureStorageService.isBiometricsEnabled(accountId);
       setBiometricsEnabled(enabled);
-      setShowPinCode(!(enabled && type !== 'None'));
+      setShowPinCode(Boolean(configRef.current?.forcePin) || !(enabled && type !== 'None'));
       setIsInitialized(true);
 
       console.log(`[UnlockModal] 初始化完成 - 设备支持: ${type}, 账号已启用: ${enabled}`);
 
       // 只有当设备支持且账号已启用生物认证时，才自动尝试
-      if (enabled && type !== 'None') {
+      if (!configRef.current?.forcePin && enabled && type !== 'None') {
         setTimeout(() => {
           attemptBiometricUnlock(accountId);
         }, 500);
@@ -420,7 +437,7 @@ export const UnlockModalContainer: React.FC = () => {
           ) : null}
 
           {/* 生物认证区域 - 只有在初始化完成且账号已启用生物认证时才显示 */}
-          {isInitialized && biometricsEnabled && biometricType !== 'None' && (
+          {isInitialized && !configRef.current?.forcePin && biometricsEnabled && biometricType !== 'None' && (
             <View style={styles.biometricSection}>
               <TouchableOpacity
                 style={styles.biometricButton}
@@ -453,7 +470,7 @@ export const UnlockModalContainer: React.FC = () => {
           )}
 
           {/* 分隔线 */}
-          {isInitialized && biometricsEnabled && biometricType !== 'None' && (
+          {isInitialized && !configRef.current?.forcePin && biometricsEnabled && biometricType !== 'None' && (
             <View style={styles.dividerContainer}>
               <View style={styles.dividerLine} />
               <Text style={styles.dividerText}>或</Text>
@@ -475,7 +492,7 @@ export const UnlockModalContainer: React.FC = () => {
                 onChangeText={setPinCode}
                 placeholder="输入PIN码"
                 placeholderTextColor="#666666"
-                secureTextEntry={!showPinCode}
+                secureTextEntry={!pinVisible}
                 autoCapitalize="none"
                 autoCorrect={false}
                 editable={!isPinLoading}
@@ -484,10 +501,10 @@ export const UnlockModalContainer: React.FC = () => {
               />
               <TouchableOpacity
                 style={styles.toggleButton}
-                onPress={() => setShowPinCode(!showPinCode)}
+                onPress={() => setPinVisible(!pinVisible)}
               >
                 <Icon
-                  name={showPinCode ? 'eye-off-outline' : 'eye-outline'}
+                  name={pinVisible ? 'eye-off-outline' : 'eye-outline'}
                   size={22}
                   color="#888888"
                 />

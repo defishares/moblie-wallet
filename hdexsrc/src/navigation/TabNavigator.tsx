@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
@@ -80,7 +80,7 @@ const TabNavigator: React.FC = () => {
           component={tab.component}
           options={{
             tabBarLabel: tab.label,
-            tabBarIcon: ({ focused, color, size }) => (
+            tabBarIcon: ({ focused, color }) => (
               <Icon
                 name={focused ? tab.iconActive : tab.icon}
                 size={24}

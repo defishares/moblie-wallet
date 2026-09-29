@@ -24,7 +24,7 @@ react {
     //   The list of variants to that are debuggable. For those we're going to
     //   skip the bundling of the JS bundle and the assets. By default is just 'debug'.
     //   If you add flavors like lite, prod, etc. you'll have to list your debuggableVariants.
-    debuggableVariants = ["hdexmainDebug", "hdexmainadminDebug", "hdextestDebug", "hdextestadminDebug"]
+    debuggableVariants = ["defiSharesDebug", "hdexmainadminDebug", "hdextestDebug", "hdextestadminDebug"]
 
     /* Bundling */
     //   A list containing the node command and its flags. Default is just 'node'.
@@ -85,8 +85,8 @@ android {
         applicationId "com.hdexapp"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode 5
+        versionName "1.0.4"
     }
     signingConfigs {
         debug {
@@ -111,30 +111,30 @@ android {
     flavorDimensions "channel"
     productFlavors {
         // 主网普通版
-        hdexmain {
+        defiShares {
             dimension "channel"
-            applicationId "org.rwacn.hdexapp"
+            applicationId "org.defishares.hdexapp"
             resValue "string", "app_name", "DefiShares"
             buildConfigField "String", "CHANNEL_TYPE", "\"hdexmain\""
         }
         // 主网管理员版
         hdexmainadmin {
             dimension "channel"
-            applicationId "org.rwacn.hdexapp.admin"
+            applicationId "org.defishares.hdexapp.admin"
             resValue "string", "app_name", "DefiShares管理(主)"
             buildConfigField "String", "CHANNEL_TYPE", "\"hdexmainadmin\""
         }
         // 测试网普通版
         hdextest {
             dimension "channel"
-            applicationId "org.rwacn.hdexapp.testnet"
+            applicationId "org.defishares.hdexapp.testnet"
             resValue "string", "app_name", "DefiShares测试网"
             buildConfigField "String", "CHANNEL_TYPE", "\"hdextest\""
         }
         // 测试网管理员版
         hdextestadmin {
             dimension "channel"
-            applicationId "org.rwacn.hdexapp.testnet.admin"
+            applicationId "org.defishares.hdexapp.testnet.admin"
             resValue "string", "app_name", "DefiShares管理(测)"
             buildConfigField "String", "CHANNEL_TYPE", "\"hdextestadmin\""
         }
@@ -156,6 +156,10 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+
+    // 1.4.0-alpha05 fixes canAuthenticate() incorrectly reporting a lockout on
+    // some Android devices. That false result used to hide fingerprint setup.
+    implementation("androidx.biometric:biometric:1.4.0-alpha05")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

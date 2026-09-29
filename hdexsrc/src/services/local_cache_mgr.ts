@@ -15,6 +15,7 @@ import type {
   OnChainMarketConfig,
   StoredAccountsData,
   LastTradingPairData,
+  CustomTradingPair,
   ApiNodeSettings,
   AssetObject,
 } from '../types';
@@ -29,6 +30,8 @@ const CACHE_KEYS = {
   MARKET_DATA: 'market_data',           // 市场数据缓存
   MARKET_CONFIG: 'market_config',       // 市场配置缓存
   USER_FAVORITES: 'user_favorites',     // 用户收藏列表
+  POOL_FAVORITES: 'pool_favorites',     // 收藏的流动性池 ID
+  CUSTOM_TRADING_PAIRS: 'custom_trading_pairs', // 用户自定义交易对
   LAST_SYNC_TIME: 'last_sync_time',     // 最后同步时间
 
   // 账号相关
@@ -43,6 +46,7 @@ const CACHE_KEYS = {
 
   // 资产相关
   ASSET_CACHE: 'asset_cache',           // 资产对象缓存
+  VALUATION_ASSET: 'valuation_asset',   // 用户选择的资产估值币种
 
   // 调试工具相关
   OBJECT_VIEWER_HISTORY: 'object_viewer_history', // 对象查看器查询历史
@@ -94,6 +98,8 @@ interface MemoryCache {
   [CACHE_KEYS.MARKET_DATA]: CachedMarketData | null;
   [CACHE_KEYS.MARKET_CONFIG]: OnChainMarketConfig | null;
   [CACHE_KEYS.USER_FAVORITES]: string[];
+  [CACHE_KEYS.POOL_FAVORITES]: string[];
+  [CACHE_KEYS.CUSTOM_TRADING_PAIRS]: CustomTradingPair[];
   [CACHE_KEYS.LAST_SYNC_TIME]: number | null;
 
   // 账号相关
@@ -108,6 +114,7 @@ interface MemoryCache {
 
   // 资产相关
   [CACHE_KEYS.ASSET_CACHE]: AssetMemoryCache | null;
+  [CACHE_KEYS.VALUATION_ASSET]: string | null;
 
   // 调试工具相关
   [CACHE_KEYS.OBJECT_VIEWER_HISTORY]: string[];
@@ -141,12 +148,15 @@ class LocalCacheManager {
       [CACHE_KEYS.MARKET_DATA]: null,
       [CACHE_KEYS.MARKET_CONFIG]: null,
       [CACHE_KEYS.USER_FAVORITES]: [],
+      [CACHE_KEYS.POOL_FAVORITES]: [],
+      [CACHE_KEYS.CUSTOM_TRADING_PAIRS]: [],
       [CACHE_KEYS.LAST_SYNC_TIME]: null,
       [CACHE_KEYS.ACCOUNTS_DATA]: null,
       [CACHE_KEYS.LAST_TRADING_PAIR]: null,
       [CACHE_KEYS.API_NODE_SETTINGS]: null,
       [CACHE_KEYS.CHAIN_WS_NODES]: [],
       [CACHE_KEYS.ASSET_CACHE]: null,
+      [CACHE_KEYS.VALUATION_ASSET]: null,
       [CACHE_KEYS.OBJECT_VIEWER_HISTORY]: [],
     };
   }
@@ -183,11 +193,14 @@ class LocalCacheManager {
       this.cache[CACHE_KEYS.MARKET_DATA] = this.loadFromDisk<CachedMarketData>(CACHE_KEYS.MARKET_DATA);
       this.cache[CACHE_KEYS.MARKET_CONFIG] = this.loadFromDisk<OnChainMarketConfig>(CACHE_KEYS.MARKET_CONFIG);
       this.cache[CACHE_KEYS.USER_FAVORITES] = this.loadFromDisk<string[]>(CACHE_KEYS.USER_FAVORITES) || [];
+      this.cache[CACHE_KEYS.POOL_FAVORITES] = this.loadFromDisk<string[]>(CACHE_KEYS.POOL_FAVORITES) || [];
+      this.cache[CACHE_KEYS.CUSTOM_TRADING_PAIRS] = this.loadFromDisk<CustomTradingPair[]>(CACHE_KEYS.CUSTOM_TRADING_PAIRS) || [];
       this.cache[CACHE_KEYS.LAST_SYNC_TIME] = this.loadFromDisk<number>(CACHE_KEYS.LAST_SYNC_TIME);
       this.cache[CACHE_KEYS.ACCOUNTS_DATA] = this.loadFromDisk<StoredAccountsData>(CACHE_KEYS.ACCOUNTS_DATA);
       this.cache[CACHE_KEYS.LAST_TRADING_PAIR] = this.loadFromDisk<LastTradingPairData>(CACHE_KEYS.LAST_TRADING_PAIR);
       this.cache[CACHE_KEYS.API_NODE_SETTINGS] = this.loadFromDisk<ApiNodeSettings>(CACHE_KEYS.API_NODE_SETTINGS);
       this.cache[CACHE_KEYS.CHAIN_WS_NODES] = this.loadFromDisk<WsNodeConfig[]>(CACHE_KEYS.CHAIN_WS_NODES) || [];
+      this.cache[CACHE_KEYS.VALUATION_ASSET] = this.loadFromDisk<string>(CACHE_KEYS.VALUATION_ASSET);
       this.cache[CACHE_KEYS.OBJECT_VIEWER_HISTORY] = this.loadFromDisk<string[]>(CACHE_KEYS.OBJECT_VIEWER_HISTORY) || [];
 
       // 加载资产缓存并构建 bySymbol 索引
@@ -403,6 +416,48 @@ class LocalCacheManager {
     return this.cache[CACHE_KEYS.USER_FAVORITES].includes(pairKey);
   }
 
+  public savePoolFavorites(poolIds: string[]): boolean {
+    const favorites = [...new Set(poolIds)];
+    if (!this.saveToDisk(CACHE_KEYS.POOL_FAVORITES, favorites)) return false;
+    this.cache[CACHE_KEYS.POOL_FAVORITES] = favorites;
+    return true;
+  }
+
+  public loadPoolFavorites(): string[] {
+    return [...this.cache[CACHE_KEYS.POOL_FAVORITES]];
+  }
+
+  // ============================================
+  // 用户自定义交易对
+  // ============================================
+
+  public saveCustomTradingPairs(pairs: CustomTradingPair[]): boolean {
+    const normalized = pairs.map(pair => ({ ...pair }));
+    this.cache[CACHE_KEYS.CUSTOM_TRADING_PAIRS] = normalized;
+    this.saveToDisk(CACHE_KEYS.CUSTOM_TRADING_PAIRS, normalized);
+    return true;
+  }
+
+  public loadCustomTradingPairs(): CustomTradingPair[] {
+    return this.cache[CACHE_KEYS.CUSTOM_TRADING_PAIRS].map(pair => ({ ...pair }));
+  }
+
+  public addCustomTradingPair(pair: CustomTradingPair): boolean {
+    const pairs = this.cache[CACHE_KEYS.CUSTOM_TRADING_PAIRS];
+    if (!pairs.some(item => item.pairKey === pair.pairKey)) {
+      pairs.push({ ...pair });
+      this.saveToDisk(CACHE_KEYS.CUSTOM_TRADING_PAIRS, pairs);
+    }
+    return true;
+  }
+
+  public removeCustomTradingPair(pairKey: string): boolean {
+    const pairs = this.cache[CACHE_KEYS.CUSTOM_TRADING_PAIRS].filter(item => item.pairKey !== pairKey);
+    this.cache[CACHE_KEYS.CUSTOM_TRADING_PAIRS] = pairs;
+    this.saveToDisk(CACHE_KEYS.CUSTOM_TRADING_PAIRS, pairs);
+    return true;
+  }
+
   // ============================================
   // 同步时间记录
   // ============================================
@@ -506,6 +561,35 @@ class LocalCacheManager {
   public clearLastTradingPair(): boolean {
     this.cache[CACHE_KEYS.LAST_TRADING_PAIR] = null;
     this.removeFromDisk(CACHE_KEYS.LAST_TRADING_PAIR);
+    return true;
+  }
+
+  // ============================================
+  // 资产估值币种
+  // ============================================
+
+  /**
+   * 保存用户选择的资产估值币种
+   */
+  public saveValuationAsset(symbol: string): boolean {
+    this.cache[CACHE_KEYS.VALUATION_ASSET] = symbol;
+    this.saveToDisk(CACHE_KEYS.VALUATION_ASSET, symbol);
+    return true;
+  }
+
+  /**
+   * 加载用户上次选择的资产估值币种
+   */
+  public loadValuationAsset(): string | null {
+    return this.cache[CACHE_KEYS.VALUATION_ASSET];
+  }
+
+  /**
+   * 清除资产估值币种
+   */
+  public clearValuationAsset(): boolean {
+    this.cache[CACHE_KEYS.VALUATION_ASSET] = null;
+    this.removeFromDisk(CACHE_KEYS.VALUATION_ASSET);
     return true;
   }
 
@@ -786,12 +870,15 @@ class LocalCacheManager {
         [CACHE_KEYS.MARKET_DATA]: null,
         [CACHE_KEYS.MARKET_CONFIG]: null,
         [CACHE_KEYS.USER_FAVORITES]: [],
+        [CACHE_KEYS.POOL_FAVORITES]: [],
+        [CACHE_KEYS.CUSTOM_TRADING_PAIRS]: [],
         [CACHE_KEYS.LAST_SYNC_TIME]: null,
         [CACHE_KEYS.ACCOUNTS_DATA]: null,
         [CACHE_KEYS.LAST_TRADING_PAIR]: null,
         [CACHE_KEYS.API_NODE_SETTINGS]: null,
         [CACHE_KEYS.CHAIN_WS_NODES]: [],
         [CACHE_KEYS.ASSET_CACHE]: null,
+        [CACHE_KEYS.VALUATION_ASSET]: null,
         [CACHE_KEYS.OBJECT_VIEWER_HISTORY]: [],
       };
 
@@ -860,4 +947,3 @@ export default localCacheManager;
 
 // 导出类型（供外部使用）
 export { CACHE_KEYS };
-

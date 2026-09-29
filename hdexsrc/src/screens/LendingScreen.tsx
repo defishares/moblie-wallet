@@ -21,6 +21,8 @@ import {
 import { Text } from '@rneui/themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useAccountStore } from '../store/useAccountStore';
 import { useBalanceStore } from '../store/useBalanceStore';
 import { backgroundService } from '../services/background_service';
@@ -38,6 +40,7 @@ import type {
   FullAccountData,
   PriceType,
 } from '../types';
+import type { RootStackParamList } from '../types';
 import { filterNumericInput } from '../utils';
 import { CURRENT_NETWORK } from '../config';
 
@@ -115,6 +118,7 @@ const getDebtPerDfs = (
 };
 
 const LendingScreen: React.FC = () => {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { currentAccount } = useAccountStore();
   const balanceItems = useBalanceStore(state => state.balanceItems);
   const [dfsAsset, setDfsAsset] = useState<AssetObject | null>(null);
@@ -656,10 +660,23 @@ const LendingScreen: React.FC = () => {
         >
           <View style={styles.shell}>
             <View style={styles.headerRow}>
-              <TouchableOpacity style={styles.resetButton} onPress={handleReset}>
-                <Icon name="reload" size={18} color="#A1ABA6" />
-                <Text style={styles.resetText}>重置</Text>
-              </TouchableOpacity>
+              <View style={styles.headerLeft}>
+                <TouchableOpacity
+                  style={styles.backButton}
+                  accessibilityRole="button"
+                  accessibilityLabel="返回"
+                  onPress={() => {
+                    if (navigation.canGoBack()) navigation.goBack();
+                    else navigation.navigate('MainTabs', { screen: 'Home' });
+                  }}
+                >
+                  <Icon name="arrow-left" size={25} color="#F4F8F6" />
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.resetButton} onPress={handleReset}>
+                  <Icon name="reload" size={18} color="#A1ABA6" />
+                  <Text style={styles.resetText}>重置</Text>
+                </TouchableOpacity>
+              </View>
               <View style={styles.pageTitleWrap}>
                 <View style={styles.pageTitleIcon}>
                   <Icon name="hand-coin-outline" size={20} color="#00D5A3" />
@@ -790,7 +807,6 @@ const LendingScreen: React.FC = () => {
               <Icon name="information-outline" size={28} color="#E6BD4A" />
               <View style={styles.noticeCopy}>
                 <Text style={styles.noticeTitle}>温馨提示</Text>
-                <Text style={styles.noticeText}>当喂价下降到强平触发价时，系统将自动出售您的抵押资产用于归还借款，请注意调整抵押率控制风险。</Text>
                 <Text style={styles.noticeText}>当锁定借款金额时，抵押率会随抵押物数量变化而变化。</Text>
                 <Text style={styles.noticeText}>当锁定抵押率时，借款金额会随抵押物数量变化而变化。</Text>
               </View>
@@ -828,6 +844,14 @@ const styles = StyleSheet.create({
     minHeight: 44,
     marginBottom: 10,
     position: 'relative',
+  },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', zIndex: 2 },
+  backButton: {
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 4,
   },
   resetButton: {
     flexDirection: 'row',

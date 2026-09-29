@@ -8,10 +8,27 @@
  */
 
 import { Buffer } from 'buffer';
-import { Apis } from 'bitsharesjs-ws';
-import { ChainStore, PrivateKey, TransactionBuilder, Aes, TransactionHelper } from 'bitsharesjs';
+import { Apis, ChainConfig } from 'bitsharesjs-ws';
+import {
+  ChainStore,
+  PrivateKey,
+  TransactionBuilder,
+  Aes,
+  TransactionHelper,
+} from 'bitsharesjs';
 import { CURRENT_NETWORK } from '../config';
 import { localCacheManager } from './local_cache_mgr';
+import {
+  buildChainMarketTickers,
+  normalizeMarketTicker,
+} from '../utils/marketTicker';
+import { readStorageFromNode, isStorageApiUnavailable } from './storage_rpc';
+import {
+  serializeAccountStorageMap,
+  confirmStorageWrite,
+  StorageConfirmationPendingError,
+  type AccountStorageUpdate,
+} from '../utils/accountStorage';
 import type {
   TickerData,
   AssetObject,
@@ -37,6 +54,10 @@ const MAX_RECONNECT_ATTEMPTS = 0;
 // 心跳超时时间（毫秒）
 const HEARTBEAT_TIMEOUT = 5000;
 
+// DeFiShares uses the DFS public-key prefix. bitsharesjs defaults to CBA,
+// which makes memo encryption reject the DFS memo keys returned by the chain.
+const DEFI_SHARES_ADDRESS_PREFIX = 'DFS';
+
 class ChainServiceManager {
   private static instance: ChainServiceManager;
   private isConnected: boolean = false;
@@ -51,7 +72,10 @@ class ChainServiceManager {
   private autoReconnectEnabled: boolean = true;
   // bitsharesjs-ws 6.0.x does not expose custom_operations_api. Keep a
   // lazily initialized adapter for versions that only expose ws_rpc.
-  private customOperationsApi: { exec: (method: string, params?: any[]) => Promise<any> } | null = null;
+  private customOperationsApi: {
+    exec: (method: string, params?: any[]) => Promise<any>;
+  } | null = null;
+  private storageApiUnavailable = false;
 
   private constructor() { }
 
@@ -95,6 +119,9 @@ class ChainServiceManager {
    * @returns Promise<boolean> 初始化是否成功
    */
   public async initChain(nodeUrl?: string): Promise<boolean> {
+    // Keep the prefix correct even when the app resumes with a persisted login
+    // and never visits the login/register screens in this process.
+    ChainConfig.setPrefix(DEFI_SHARES_ADDRESS_PREFIX);
     const targetUrl = nodeUrl || CURRENT_NETWORK.defaultWsNode;
 
     // 如果已经连接到相同的节点，直接返回成功
@@ -127,7 +154,12 @@ class ChainServiceManager {
       console.log('[ChainService] 开始连接到区块链节点:', targetUrl);
 
       // 初始化 WebSocket 连接
-      const res = await Apis.instance(targetUrl, true, 4000, { enableCustomOperations: true }).init_promise;
+      const res = await Apis.instance(targetUrl, true, 4000, {
+        enableCustomOperations: true,
+      }).init_promise;
+      // Connecting can refresh ChainConfig from the node. Re-assert the
+      // application prefix before ChainStore and any transaction operations.
+      ChainConfig.setPrefix(DEFI_SHARES_ADDRESS_PREFIX);
       console.log('[ChainService] 已连接到网络:', res[0]?.network);
 
       // 初始化 ChainStore
@@ -136,6 +168,7 @@ class ChainServiceManager {
 
       this.isConnected = true;
       this.customOperationsApi = null;
+      this.storageApiUnavailable = false;
       this.isInitializing = false;
       this.reconnectAttempts = 0;
       this.isReconnecting = false;
@@ -174,7 +207,9 @@ class ChainServiceManager {
    * @param nodeUrls 节点 URL 列表
    * @returns Promise<{ success: boolean; connectedUrl?: string }> 初始化结果
    */
-  public async initChainWithFallback(nodeUrls: string[]): Promise<{ success: boolean; connectedUrl?: string }> {
+  public async initChainWithFallback(
+    nodeUrls: string[],
+  ): Promise<{ success: boolean; connectedUrl?: string }> {
     if (nodeUrls.length === 0) {
       return { success: false };
     }
@@ -184,7 +219,9 @@ class ChainServiceManager {
 
     for (let i = 0; i < nodeUrls.length; i++) {
       const url = nodeUrls[i];
-      console.log(`[ChainService] 尝试连接节点 ${i + 1}/${nodeUrls.length}: ${url}`);
+      console.log(
+        `[ChainService] 尝试连接节点 ${i + 1}/${nodeUrls.length}: ${url}`,
+      );
 
       try {
         const success = await this.initChain(url);
@@ -210,7 +247,10 @@ class ChainServiceManager {
    * @param timeout 超时时间（毫秒），默认 5000
    * @returns Promise<NodeTestResult> 测试结果
    */
-  public async testNodeConnection(url: string, timeout: number = 5000): Promise<NodeTestResult> {
+  public async testNodeConnection(
+    url: string,
+    timeout: number = 5000,
+  ): Promise<NodeTestResult> {
     const startTime = Date.now();
 
     try {
@@ -228,20 +268,22 @@ class ChainServiceManager {
           ws.onopen = () => {
             clearTimeout(timeoutId);
             // 发送一个简单的 RPC 请求来验证节点
-            ws.send(JSON.stringify({
+            ws.send(
+              JSON.stringify({
               id: 1,
               method: 'call',
               params: [1, 'login', ['', '']],
-            }));
+              }),
+            );
           };
 
-          ws.onmessage = (event) => {
+          ws.onmessage = event => {
             clearTimeout(timeoutId);
             ws.close();
             resolve();
           };
 
-          ws.onerror = (error) => {
+          ws.onerror = error => {
             clearTimeout(timeoutId);
             ws.close();
             reject(new Error('连接错误'));
@@ -377,8 +419,13 @@ class ChainServiceManager {
     }
 
     // 检查重连次数限制
-    if (MAX_RECONNECT_ATTEMPTS > 0 && this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      console.error(`[ChainService] 已达到最大重连次数 (${MAX_RECONNECT_ATTEMPTS})，停止重连`);
+    if (
+      MAX_RECONNECT_ATTEMPTS > 0 &&
+      this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS
+    ) {
+      console.error(
+        `[ChainService] 已达到最大重连次数 (${MAX_RECONNECT_ATTEMPTS})，停止重连`,
+      );
       this.isReconnecting = false;
       return;
     }
@@ -386,7 +433,11 @@ class ChainServiceManager {
     this.isReconnecting = true;
     this.reconnectAttempts++;
 
-    console.log(`[ChainService] ${RECONNECT_INTERVAL / 1000}秒后尝试第 ${this.reconnectAttempts} 次重连...`);
+    console.log(
+      `[ChainService] ${RECONNECT_INTERVAL / 1000}秒后尝试第 ${
+        this.reconnectAttempts
+      } 次重连...`,
+    );
 
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null;
@@ -443,7 +494,10 @@ class ChainServiceManager {
    * @param nodeUrl 可选的新节点 URL，不传则使用当前节点
    */
   public async manualReconnect(nodeUrl?: string): Promise<boolean> {
-    console.log('[ChainService] 手动触发重连', nodeUrl ? `到节点: ${nodeUrl}` : '');
+    console.log(
+      '[ChainService] 手动触发重连',
+      nodeUrl ? `到节点: ${nodeUrl}` : '',
+    );
     this.stopReconnect();
     this.stopHeartbeat();
     this.isConnected = false;
@@ -490,7 +544,9 @@ class ChainServiceManager {
       let waited = 0;
 
       while (waited < maxWaitTime) {
-        await new Promise<void>(resolve => setTimeout(() => resolve(), checkInterval));
+        await new Promise<void>(resolve =>
+          setTimeout(() => resolve(), checkInterval),
+        );
         waited += checkInterval;
 
         if (this.isConnected) {
@@ -510,7 +566,11 @@ class ChainServiceManager {
     }
 
     // 触发自动重连（如果尚未触发）
-    if (this.autoReconnectEnabled && !this.reconnectTimer && !this.isReconnecting) {
+    if (
+      this.autoReconnectEnabled &&
+      !this.reconnectTimer &&
+      !this.isReconnecting
+    ) {
       this.handleDisconnect();
     }
 
@@ -520,7 +580,10 @@ class ChainServiceManager {
   /**
    * 执行 database_api 调用
    */
-  private async execDb<T = any>(method: string, params: any[] = []): Promise<T> {
+  private async execDb<T = any>(
+    method: string,
+    params: any[] = [],
+  ): Promise<T> {
     await this.ensureConnected();
     const dbApi = Apis.instance().db_api();
     if (!dbApi) {
@@ -532,7 +595,10 @@ class ChainServiceManager {
   /**
    * 执行 history_api 调用
    */
-  private async execHistory<T = any>(method: string, params: any[] = []): Promise<T> {
+  private async execHistory<T = any>(
+    method: string,
+    params: any[] = [],
+  ): Promise<T> {
     await this.ensureConnected();
     const historyApi = Apis.instance().history_api();
     if (!historyApi) {
@@ -544,10 +610,14 @@ class ChainServiceManager {
   /**
    * 执行 custom_operations_api 调用（需要节点支持 enableCustomOperations: true）
    */
-  private async execCustomOperations<T = any>(method: string, params: any[] = []): Promise<T> {
+  private async execCustomOperations<T = any>(
+    method: string,
+    params: any[] = [],
+  ): Promise<T> {
     await this.ensureConnected();
     const apis = Apis.instance() as any;
-    let api = typeof apis.custom_operations_api === 'function'
+    let api =
+      typeof apis.custom_operations_api === 'function'
       ? apis.custom_operations_api()
       : null;
 
@@ -644,7 +714,10 @@ class ChainServiceManager {
    * @param blockNum 区块高度
    * @param withWitnessSignature 是否包含见证人签名（可选）
    */
-  public getBlockHeader(blockNum: number, withWitnessSignature?: boolean): Promise<any> {
+  public getBlockHeader(
+    blockNum: number,
+    withWitnessSignature?: boolean,
+  ): Promise<any> {
     const params: any[] = [blockNum];
     if (withWitnessSignature !== undefined) {
       params.push(withWitnessSignature);
@@ -657,7 +730,10 @@ class ChainServiceManager {
    * @param blockNums 区块高度数组
    * @param withWitnessSignatures 是否包含见证人签名（可选）
    */
-  public getBlockHeaderBatch(blockNums: number[], withWitnessSignatures?: boolean): Promise<Map<number, any>> {
+  public getBlockHeaderBatch(
+    blockNums: number[],
+    withWitnessSignatures?: boolean,
+  ): Promise<Map<number, any>> {
     const params: any[] = [blockNums];
     if (withWitnessSignatures !== undefined) {
       params.push(withWitnessSignatures);
@@ -699,7 +775,10 @@ class ChainServiceManager {
    * @param namesOrIds 账户名称或ID数组
    * @param subscribe 是否订阅（默认 false）
    */
-  public getFullAccounts(namesOrIds: string[], subscribe: boolean = false): Promise<Array<[string, FullAccountData]>> {
+  public getFullAccounts(
+    namesOrIds: string[],
+    subscribe: boolean = false,
+  ): Promise<Array<[string, FullAccountData]>> {
     return this.execDb('get_full_accounts', [namesOrIds, subscribe]);
   }
 
@@ -708,7 +787,10 @@ class ChainServiceManager {
    * @param lowerBound 起始字符
    * @param limit 查询数量限制
    */
-  public lookupAccounts(lowerBound: string, limit: number): Promise<Array<[string, string]>> {
+  public lookupAccounts(
+    lowerBound: string,
+    limit: number,
+  ): Promise<Array<[string, string]>> {
     return this.execDb('lookup_accounts', [lowerBound, limit]);
   }
 
@@ -736,7 +818,10 @@ class ChainServiceManager {
    * @param accountId 账户ID
    * @param assetIds 资产ID数组（空数组表示获取所有资产余额）
    */
-  public getAccountBalances(accountId: string, assetIds: string[] = []): Promise<any[]> {
+  public getAccountBalances(
+    accountId: string,
+    assetIds: string[] = [],
+  ): Promise<any[]> {
     return this.execDb('get_account_balances', [accountId, assetIds]);
   }
 
@@ -745,8 +830,14 @@ class ChainServiceManager {
    * @param accountName 账户名称
    * @param assetSymbols 资产符号数组
    */
-  public getNamedAccountBalances(accountName: string, assetSymbols: string[]): Promise<any[]> {
-    return this.execDb('get_named_account_balances', [accountName, assetSymbols]);
+  public getNamedAccountBalances(
+    accountName: string,
+    assetSymbols: string[],
+  ): Promise<any[]> {
+    return this.execDb('get_named_account_balances', [
+      accountName,
+      assetSymbols,
+    ]);
   }
 
   // ============================================================
@@ -784,7 +875,11 @@ class ChainServiceManager {
    * @param start 起始资产ID
    * @param limit 查询数量限制
    */
-  public getAssetsByIssuer(issuerNameOrId: string, start: string, limit: number): Promise<AssetObject[]> {
+  public getAssetsByIssuer(
+    issuerNameOrId: string,
+    start: string,
+    limit: number,
+  ): Promise<AssetObject[]> {
     return this.execDb('get_assets_by_issuer', [issuerNameOrId, start, limit]);
   }
 
@@ -804,8 +899,19 @@ class ChainServiceManager {
    * @param baseSymbol 基础资产符号
    * @param quoteSymbol 报价资产符号
    */
-  public getTicker(baseSymbol: string, quoteSymbol: string): Promise<TickerData> {
+  public getTicker(
+    baseSymbol: string,
+    quoteSymbol: string,
+  ): Promise<TickerData> {
     return this.execDb('get_ticker', [baseSymbol, quoteSymbol]);
+  }
+
+  /** Discover markets recorded by the chain, including markets with no volume today. */
+  public async queryChainMarkets(): Promise<Map<string, TickerData>> {
+    // The current node allows at most 100 markets per request.
+    const rows = await this.execDb('get_top_markets', [100]);
+    if (!Array.isArray(rows)) throw new Error('链上市场列表格式错误');
+    return buildChainMarketTickers(rows);
   }
 
   /**
@@ -823,7 +929,11 @@ class ChainServiceManager {
    * @param quoteSymbol 报价资产符号
    * @param limit 深度限制
    */
-  public getOrderBook(baseSymbol: string, quoteSymbol: string, limit: number = 50): Promise<any> {
+  public getOrderBook(
+    baseSymbol: string,
+    quoteSymbol: string,
+    limit: number = 50,
+  ): Promise<any> {
     return this.execDb('get_order_book', [baseSymbol, quoteSymbol, limit]);
   }
 
@@ -833,7 +943,11 @@ class ChainServiceManager {
    * @param quoteId 报价资产ID
    * @param limit 查询数量限制
    */
-  public getLimitOrders(baseId: string, quoteId: string, limit: number): Promise<LimitOrder[]> {
+  public getLimitOrders(
+    baseId: string,
+    quoteId: string,
+    limit: number,
+  ): Promise<LimitOrder[]> {
     return this.execDb('get_limit_orders', [baseId, quoteId, limit]);
   }
 
@@ -843,7 +957,11 @@ class ChainServiceManager {
    * @param limit 查询数量限制
    * @param startId 起始订单ID（用于分页）
    */
-  public getLimitOrdersByAccount(accountNameOrId: string, limit: number, startId?: string): Promise<LimitOrder[]> {
+  public getLimitOrdersByAccount(
+    accountNameOrId: string,
+    limit: number,
+    startId?: string,
+  ): Promise<LimitOrder[]> {
     const params: any[] = [accountNameOrId, limit];
     if (startId) {
       params.push(startId);
@@ -866,8 +984,16 @@ class ChainServiceManager {
    * @param start 起始订单ID
    * @param limit 查询数量限制
    */
-  public getCallOrdersByAccount(accountNameOrId: string, start: string, limit: number): Promise<any[]> {
-    return this.execDb('get_call_orders_by_account', [accountNameOrId, start, limit]);
+  public getCallOrdersByAccount(
+    accountNameOrId: string,
+    start: string,
+    limit: number,
+  ): Promise<any[]> {
+    return this.execDb('get_call_orders_by_account', [
+      accountNameOrId,
+      start,
+      limit,
+    ]);
   }
 
   /**
@@ -875,7 +1001,10 @@ class ChainServiceManager {
    * @param assetSymbolOrId 资产符号或ID
    * @param limit 查询数量限制
    */
-  public getSettleOrders(assetSymbolOrId: string, limit: number): Promise<any[]> {
+  public getSettleOrders(
+    assetSymbolOrId: string,
+    limit: number,
+  ): Promise<any[]> {
     return this.execDb('get_settle_orders', [assetSymbolOrId, limit]);
   }
 
@@ -885,8 +1014,16 @@ class ChainServiceManager {
    * @param start 起始订单ID
    * @param limit 查询数量限制
    */
-  public getSettleOrdersByAccount(accountNameOrId: string, start: string, limit: number): Promise<any[]> {
-    return this.execDb('get_settle_orders_by_account', [accountNameOrId, start, limit]);
+  public getSettleOrdersByAccount(
+    accountNameOrId: string,
+    start: string,
+    limit: number,
+  ): Promise<any[]> {
+    return this.execDb('get_settle_orders_by_account', [
+      accountNameOrId,
+      start,
+      limit,
+    ]);
   }
 
   /**
@@ -897,8 +1034,20 @@ class ChainServiceManager {
    * @param stop 结束时间（ISO格式）
    * @param limit 查询数量限制
    */
-  public getTradeHistory(baseSymbol: string, quoteSymbol: string, start: string, stop: string, limit: number): Promise<any[]> {
-    return this.execDb('get_trade_history', [baseSymbol, quoteSymbol, start, stop, limit]);
+  public getTradeHistory(
+    baseSymbol: string,
+    quoteSymbol: string,
+    start: string,
+    stop: string,
+    limit: number,
+  ): Promise<any[]> {
+    return this.execDb('get_trade_history', [
+      baseSymbol,
+      quoteSymbol,
+      start,
+      stop,
+      limit,
+    ]);
   }
 
   /**
@@ -907,7 +1056,11 @@ class ChainServiceManager {
    * @param baseId 基础资产ID
    * @param quoteId 报价资产ID
    */
-  public subscribeToMarket(callback: (data: any) => void, baseId: string, quoteId: string): Promise<any> {
+  public subscribeToMarket(
+    callback: (data: any) => void,
+    baseId: string,
+    quoteId: string,
+  ): Promise<any> {
     return this.execDb('subscribe_to_market', [callback, baseId, quoteId]);
   }
 
@@ -945,7 +1098,10 @@ class ChainServiceManager {
    * @param lowerBound 起始字符
    * @param limit 查询数量限制
    */
-  public lookupWitnessAccounts(lowerBound: string, limit: number): Promise<Array<[string, string]>> {
+  public lookupWitnessAccounts(
+    lowerBound: string,
+    limit: number,
+  ): Promise<Array<[string, string]>> {
     return this.execDb('lookup_witness_accounts', [lowerBound, limit]);
   }
 
@@ -977,7 +1133,10 @@ class ChainServiceManager {
    * @param lowerBound 起始字符
    * @param limit 查询数量限制
    */
-  public lookupCommitteeMemberAccounts(lowerBound: string, limit: number): Promise<Array<[string, string]>> {
+  public lookupCommitteeMemberAccounts(
+    lowerBound: string,
+    limit: number,
+  ): Promise<Array<[string, string]>> {
     return this.execDb('lookup_committee_member_accounts', [lowerBound, limit]);
   }
 
@@ -1010,14 +1169,15 @@ class ChainServiceManager {
    * @param subscribe 是否订阅（可选）
    * @param withStatistics 是否包含统计数据（可选）
    */
-  public getLiquidityPools(poolIds: string[], subscribe?: boolean, withStatistics?: boolean): Promise<any[]> {
+  public getLiquidityPools(
+    poolIds: string[],
+    subscribe?: boolean,
+    withStatistics?: boolean,
+  ): Promise<any[]> {
     const params: any[] = [poolIds];
-    if (subscribe !== undefined) {
-      params.push(subscribe);
-    }
-    if (withStatistics !== undefined) {
-      params.push(withStatistics);
-    }
+    if (subscribe !== undefined || withStatistics !== undefined)
+      params.push(subscribe === undefined ? null : subscribe);
+    if (withStatistics !== undefined) params.push(withStatistics);
     return this.execDb('get_liquidity_pools', params);
   }
 
@@ -1027,10 +1187,16 @@ class ChainServiceManager {
    * @param startId 起始池ID
    * @param withStatistics 是否包含统计数据
    */
-  public listLiquidityPools(limit?: number, startId?: string, withStatistics?: boolean): Promise<any[]> {
+  public listLiquidityPools(
+    limit?: number,
+    startId?: string,
+    withStatistics?: boolean,
+  ): Promise<any[]> {
     const params: any[] = [];
     if (limit !== undefined) params.push(limit);
-    if (startId !== undefined) params.push(startId);
+    // Graphene 的第三个参数是 with_stats；需要跳过 start_id 时保留 null 占位。
+    if (startId !== undefined || withStatistics !== undefined)
+      params.push(startId === undefined ? null : startId);
     if (withStatistics !== undefined) params.push(withStatistics);
     return this.execDb('list_liquidity_pools', params);
   }
@@ -1042,10 +1208,16 @@ class ChainServiceManager {
    * @param startId 起始池ID
    * @param withStatistics 是否包含统计数据
    */
-  public getLiquidityPoolsByAssetA(assetA: string, limit?: number, startId?: string, withStatistics?: boolean): Promise<any[]> {
+  public getLiquidityPoolsByAssetA(
+    assetA: string,
+    limit?: number,
+    startId?: string,
+    withStatistics?: boolean,
+  ): Promise<any[]> {
     const params: any[] = [assetA];
     if (limit !== undefined) params.push(limit);
-    if (startId !== undefined) params.push(startId);
+    if (startId !== undefined || withStatistics !== undefined)
+      params.push(startId === undefined ? null : startId);
     if (withStatistics !== undefined) params.push(withStatistics);
     return this.execDb('get_liquidity_pools_by_asset_a', params);
   }
@@ -1057,12 +1229,46 @@ class ChainServiceManager {
    * @param startId 起始池ID
    * @param withStatistics 是否包含统计数据
    */
-  public getLiquidityPoolsByAssetB(assetB: string, limit?: number, startId?: string, withStatistics?: boolean): Promise<any[]> {
+  public getLiquidityPoolsByAssetB(
+    assetB: string,
+    limit?: number,
+    startId?: string,
+    withStatistics?: boolean,
+  ): Promise<any[]> {
     const params: any[] = [assetB];
     if (limit !== undefined) params.push(limit);
-    if (startId !== undefined) params.push(startId);
+    if (startId !== undefined || withStatistics !== undefined)
+      params.push(startId === undefined ? null : startId);
     if (withStatistics !== undefined) params.push(withStatistics);
     return this.execDb('get_liquidity_pools_by_asset_b', params);
+  }
+
+  /** 查询池子的链上操作历史。参数顺序遵循 defishares-core history_api。 */
+  public getLiquidityPoolHistory(
+    poolId: string,
+    start?: number | string,
+    stop?: number | string,
+    limit?: number,
+    operationType?: number,
+  ): Promise<any[]> {
+    const params: any[] = [poolId];
+    if (
+      start !== undefined ||
+      stop !== undefined ||
+      limit !== undefined ||
+      operationType !== undefined
+    )
+      params.push(start === undefined ? null : start);
+    if (
+      stop !== undefined ||
+      limit !== undefined ||
+      operationType !== undefined
+    )
+      params.push(stop === undefined ? null : stop);
+    if (limit !== undefined || operationType !== undefined)
+      params.push(limit === undefined ? null : limit);
+    if (operationType !== undefined) params.push(operationType);
+    return this.execHistory('get_liquidity_pool_history', params);
   }
 
   // ============================================================
@@ -1087,7 +1293,11 @@ class ChainServiceManager {
    * @param limit 查询数量限制
    * @param startId 起始票据ID
    */
-  public getTicketsByAccount(accountNameOrId: string, limit?: number, startId?: string): Promise<any[]> {
+  public getTicketsByAccount(
+    accountNameOrId: string,
+    limit?: number,
+    startId?: string,
+  ): Promise<any[]> {
     const params: any[] = [accountNameOrId];
     if (limit !== undefined) params.push(limit);
     if (startId !== undefined) params.push(startId);
@@ -1115,7 +1325,11 @@ class ChainServiceManager {
    * @param start 起始 HTLC ID
    * @param limit 查询数量限制
    */
-  public getHtlcByFrom(accountNameOrId: string, start: string, limit: number): Promise<any[]> {
+  public getHtlcByFrom(
+    accountNameOrId: string,
+    start: string,
+    limit: number,
+  ): Promise<any[]> {
     return this.execDb('get_htlc_by_from', [accountNameOrId, start, limit]);
   }
 
@@ -1125,7 +1339,11 @@ class ChainServiceManager {
    * @param start 起始 HTLC ID
    * @param limit 查询数量限制
    */
-  public getHtlcByTo(accountNameOrId: string, start: string, limit: number): Promise<any[]> {
+  public getHtlcByTo(
+    accountNameOrId: string,
+    start: string,
+    limit: number,
+  ): Promise<any[]> {
     return this.execDb('get_htlc_by_to', [accountNameOrId, start, limit]);
   }
 
@@ -1163,7 +1381,10 @@ class ChainServiceManager {
    * @param accountNameOrId 账户名或ID
    * @param signers 签名者公钥数组
    */
-  public verifyAccountAuthority(accountNameOrId: string, signers: string[]): Promise<boolean> {
+  public verifyAccountAuthority(
+    accountNameOrId: string,
+    signers: string[],
+  ): Promise<boolean> {
     return this.execDb('verify_account_authority', [accountNameOrId, signers]);
   }
 
@@ -1178,8 +1399,18 @@ class ChainServiceManager {
    * @param start 起始序号
    * @param limit 查询数量限制
    */
-  public getAccountHistoryByOperations(accountNameOrId: string, operationTypes: number[], start: number, limit: number): Promise<any> {
-    return this.execHistory('get_account_history_by_operations', [accountNameOrId, operationTypes, start, limit]);
+  public getAccountHistoryByOperations(
+    accountNameOrId: string,
+    operationTypes: number[],
+    start: number,
+    limit: number,
+  ): Promise<any> {
+    return this.execHistory('get_account_history_by_operations', [
+      accountNameOrId,
+      operationTypes,
+      start,
+      limit,
+    ]);
   }
 
   /**
@@ -1188,7 +1419,11 @@ class ChainServiceManager {
    * @param quoteId 报价资产ID
    * @param limit 查询数量限制
    */
-  public getFillOrderHistory(baseId: string, quoteId: string, limit: number): Promise<any[]> {
+  public getFillOrderHistory(
+    baseId: string,
+    quoteId: string,
+    limit: number,
+  ): Promise<any[]> {
     return this.execHistory('get_fill_order_history', [baseId, quoteId, limit]);
   }
 
@@ -1205,17 +1440,40 @@ class ChainServiceManager {
    * @returns 解析后的成交记录数组
    */
   public async queryFillOrderHistory(
-    tradingPair: { baseId: string; quoteId: string; basePrecision: number; quotePrecision: number },
-    limit: number
-  ): Promise<Array<{ time: string; isSell: boolean; isCall: boolean; price: number; amount: number }>> {
+    tradingPair: {
+      baseId: string;
+      quoteId: string;
+      basePrecision: number;
+      quotePrecision: number;
+    },
+    limit: number,
+  ): Promise<
+    Array<{
+      time: string;
+      isSell: boolean;
+      isCall: boolean;
+      price: number;
+      amount: number;
+    }>
+  > {
     const { baseId, quoteId, basePrecision, quotePrecision } = tradingPair;
     const basePrecisionPow = Math.pow(10, basePrecision);
     const quotePrecisionPow = Math.pow(10, quotePrecision);
 
     // 查询原始数据，乘以2是因为每笔交易有买卖双方
-    const dataArray = await this.getFillOrderHistory(baseId, quoteId, limit * 2);
+    const dataArray = await this.getFillOrderHistory(
+      baseId,
+      quoteId,
+      limit * 2,
+    );
 
-    const fillOrders: Array<{ time: string; isSell: boolean; isCall: boolean; price: number; amount: number }> = [];
+    const fillOrders: Array<{
+      time: string;
+      isSell: boolean;
+      isCall: boolean;
+      price: number;
+      amount: number;
+    }> = [];
 
     for (const fillOrder of dataArray) {
       const op = fillOrder.op;
@@ -1260,7 +1518,12 @@ class ChainServiceManager {
 
         if (fillPrice) {
           // 使用 fill_price 计算价格
-          price = this.calcPriceFromPriceObject(fillPrice, baseId, basePrecision, quotePrecision);
+          price = this.calcPriceFromPriceObject(
+            fillPrice,
+            baseId,
+            basePrecision,
+            quotePrecision,
+          );
         } else {
           // 通过收益计算价格：price = 获得的 quote / 卖出的 base
           const gainAmount = parseInt(receives.amount, 10);
@@ -1283,7 +1546,12 @@ class ChainServiceManager {
 
         if (fillPrice) {
           // 使用 fill_price 计算价格
-          price = this.calcPriceFromPriceObject(fillPrice, baseId, basePrecision, quotePrecision);
+          price = this.calcPriceFromPriceObject(
+            fillPrice,
+            baseId,
+            basePrecision,
+            quotePrecision,
+          );
         } else {
           // 通过成本计算价格：price = 支付的 quote / 买入的 base
           const costAmount = parseInt(pays.amount, 10);
@@ -1322,10 +1590,13 @@ class ChainServiceManager {
    * @returns 价格
    */
   private calcPriceFromPriceObject(
-    priceObject: { base: { amount: string; asset_id: string }; quote: { amount: string; asset_id: string } },
+    priceObject: {
+      base: { amount: string; asset_id: string };
+      quote: { amount: string; asset_id: string };
+    },
     baseId: string,
     basePrecision: number,
-    quotePrecision: number
+    quotePrecision: number,
   ): number {
     const priceBase = priceObject.base;
     const priceQuote = priceObject.quote;
@@ -1357,8 +1628,20 @@ class ChainServiceManager {
    * @param start 开始时间（ISO格式）
    * @param end 结束时间（ISO格式）
    */
-  public getMarketHistory(baseId: string, quoteId: string, bucketSeconds: number, start: string, end: string): Promise<any[]> {
-    return this.execHistory('get_market_history', [baseId, quoteId, bucketSeconds, start, end]);
+  public getMarketHistory(
+    baseId: string,
+    quoteId: string,
+    bucketSeconds: number,
+    start: string,
+    end: string,
+  ): Promise<any[]> {
+    return this.execHistory('get_market_history', [
+      baseId,
+      quoteId,
+      bucketSeconds,
+      start,
+      end,
+    ]);
   }
 
   /**
@@ -1377,9 +1660,40 @@ class ChainServiceManager {
    * @param accountNameOrId 账户名或ID（null 或空字符串查询所有账户）
    * @param catalog 存储目录
    */
-  public getStorageInfo(accountNameOrId: string | null, catalog: string): Promise<any[]> {
+  public async getStorageInfo(
+    accountNameOrId: string | null,
+    catalog: string,
+  ): Promise<any[]> {
+    await this.ensureConnected();
     const params: any[] = [accountNameOrId || null, catalog];
-    return this.execCustomOperations('get_storage_info', params);
+    if (!this.storageApiUnavailable) {
+      try {
+        return await this.execCustomOperations('get_storage_info', params);
+      } catch (error) {
+        if (!isStorageApiUnavailable(error)) throw error;
+        this.storageApiUnavailable = true;
+      }
+    }
+    // api.defishares.org has no public custom_operations API. Use a separate
+    // public read connection and verify its chain ID before requesting storage.
+    const expectedChainId = Apis.instance().chain_id;
+    try {
+      const rows = await readStorageFromNode(
+        'wss://api-01.defishares.org/ws/',
+        expectedChainId,
+        accountNameOrId || null,
+        catalog,
+      );
+      if (Apis.instance().chain_id !== expectedChainId)
+        throw new Error('网络已切换，请重新读取公告');
+      return rows;
+    } catch (error) {
+      throw new Error(
+        `无法读取公告存储：${
+          error instanceof Error ? error.message : '请稍后重试'
+        }`,
+      );
+    }
   }
 
   /**
@@ -1394,13 +1708,10 @@ class ChainServiceManager {
    * @param privateKeyWif 私钥 WIF 格式
    * @returns 交易结果
    */
-  public async accountStorageMap(params: {
-    accountId: string;
-    remove: boolean;
-    catalog: string;
-    keyValues: Array<[string, string]>;
-    feeAssetId?: string;
-  }, privateKeyWif: string): Promise<any> {
+  public async accountStorageMap(
+    params: AccountStorageUpdate,
+    privateKeyWif: string,
+  ): Promise<any> {
     await this.ensureConnected();
 
     const {
@@ -1421,7 +1732,7 @@ class ChainServiceManager {
       payer: accountId,
       required_auths: [accountId],
       id: 0,  // custom_operations plugin 使用 id=0
-      data: this.serializeAccountStorageMap(remove, catalog, keyValues),
+      data: serializeAccountStorageMap(remove, catalog, keyValues),
     });
 
     // 设置手续费
@@ -1433,6 +1744,8 @@ class ChainServiceManager {
 
     // 广播
     const result = await tr.broadcast();
+    if (!(await this.confirmAccountStorageMap(params)))
+      throw new StorageConfirmationPendingError();
     console.log('[ChainService] accountStorageMap 操作成功:', result);
     return result;
   }
@@ -1441,24 +1754,14 @@ class ChainServiceManager {
    * 序列化 account_storage_map 操作数据
    * 格式参考 BitShares custom_operations plugin
    */
-  private serializeAccountStorageMap(remove: boolean, catalog: string, keyValues: Array<[string, string]>): string {
-    // 构建操作数据结构
-    // 格式: { "account_storage_map": { "remove": bool, "catalog": string, "key_values": [[key, value], ...] } }
-    const opData = {
-      account_storage_map: {
-        remove,
-        catalog,
-        key_values: keyValues,
-      },
-    };
-
-    // 转换为十六进制字符串
-    const jsonStr = JSON.stringify(opData);
-    let hex = '';
-    for (let i = 0; i < jsonStr.length; i++) {
-      hex += jsonStr.charCodeAt(i).toString(16).padStart(2, '0');
-    }
-    return hex;
+  public confirmAccountStorageMap(
+    params: AccountStorageUpdate,
+  ): Promise<boolean> {
+    return confirmStorageWrite(
+      () => this.getStorageInfo(params.accountId, params.catalog),
+      params.keyValues,
+      params.remove,
+    );
   }
 
   // ============================================================
@@ -1469,7 +1772,9 @@ class ChainServiceManager {
    * 查询单个完整账户信息
    * @param accountNameOrId 账户名或ID
    */
-  public async queryFullAccountInfo(accountNameOrId: string): Promise<FullAccountData | null> {
+  public async queryFullAccountInfo(
+    accountNameOrId: string,
+  ): Promise<FullAccountData | null> {
     try {
       const result = await this.getFullAccounts([accountNameOrId], false);
       if (result && result.length > 0 && result[0][1]) {
@@ -1500,7 +1805,10 @@ class ChainServiceManager {
    * @param symbols 资产符号数组
    * @param useCache 是否使用缓存（默认 true）
    */
-  public async queryAssetsBySymbols(symbols: string[], useCache: boolean = true): Promise<Map<string, AssetObject>> {
+  public async queryAssetsBySymbols(
+    symbols: string[],
+    useCache: boolean = true,
+  ): Promise<Map<string, AssetObject>> {
     const result = new Map<string, AssetObject>();
 
     if (symbols.length === 0) {
@@ -1526,7 +1834,9 @@ class ChainServiceManager {
           return result;
         }
 
-        console.log(`[ChainService] 缓存命中 ${cachedAssets.length} 个，需查询 ${symbolsToQuery.length} 个`);
+        console.log(
+          `[ChainService] 缓存命中 ${cachedAssets.length} 个，需查询 ${symbolsToQuery.length} 个`,
+        );
       }
 
       // 2. 查询链上数据
@@ -1555,22 +1865,30 @@ class ChainServiceManager {
    * 批量获取行情 Ticker 数据
    * @param pairs 交易对数组，每项包含 {base: string, quote: string}
    */
-  public async queryTickers(pairs: Array<{ base: string; quote: string }>): Promise<Map<string, TickerData>> {
+  public async queryTickers(
+    pairs: Array<{ base: string; quote: string }>,
+  ): Promise<Map<string, TickerData>> {
     const result = new Map<string, TickerData>();
 
     // 一笔交易对的查询失败不应阻断其他交易对的实时行情更新。
     const tickers = await Promise.allSettled(
-      pairs.map(pair => this.getTicker(pair.base, pair.quote))
+      pairs.map(pair => this.getTicker(pair.base, pair.quote)),
     );
 
     tickers.forEach((ticker, index) => {
       if (ticker.status !== 'fulfilled') {
-        console.log(`[ChainService] 查询行情失败: ${pairs[index].base}/${pairs[index].quote}`, ticker.reason);
+        console.log(
+          `[ChainService] 查询行情失败: ${pairs[index].base}/${pairs[index].quote}`,
+          ticker.reason,
+        );
         return;
       }
 
       const pair = pairs[index];
-      result.set(`${pair.base}_${pair.quote}`, ticker.value);
+      result.set(
+        `${pair.base}_${pair.quote}`,
+        normalizeMarketTicker(ticker.value),
+      );
     });
 
     return result;
@@ -1614,7 +1932,10 @@ class ChainServiceManager {
    * @param quoteAsset 报价资产对象
    * @returns 交易对信息
    */
-  public buildTradingPair(baseAsset: AssetObject, quoteAsset: AssetObject): TradingPair {
+  public buildTradingPair(
+    baseAsset: AssetObject,
+    quoteAsset: AssetObject,
+  ): TradingPair {
     return {
       baseId: baseAsset.id,
       baseSymbol: baseAsset.symbol,
@@ -1633,11 +1954,16 @@ class ChainServiceManager {
    * @param quoteSymbol 报价资产符号
    * @returns 交易对信息，如果资产不存在则返回 null
    */
-  public async buildTradingPairBySymbols(baseSymbol: string, quoteSymbol: string): Promise<TradingPair | null> {
+  public async buildTradingPairBySymbols(
+    baseSymbol: string,
+    quoteSymbol: string,
+  ): Promise<TradingPair | null> {
     try {
       const assets = await this.lookupAssetSymbols([baseSymbol, quoteSymbol]);
       if (!assets || assets.length < 2 || !assets[0] || !assets[1]) {
-        console.error(`[ChainService] 资产不存在: ${baseSymbol} 或 ${quoteSymbol}`);
+        console.error(
+          `[ChainService] 资产不存在: ${baseSymbol} 或 ${quoteSymbol}`,
+        );
         return null;
       }
       return this.buildTradingPair(assets[0], assets[1]);
@@ -1662,12 +1988,19 @@ class ChainServiceManager {
    * @param limit 查询数量限制
    * @returns 订单簿数据（买单和卖单列表）
    */
-  public async queryLimitOrders(tradingPair: TradingPair, limit: number = 100): Promise<OrderBookData> {
+  public async queryLimitOrders(
+    tradingPair: TradingPair,
+    limit: number = 100,
+  ): Promise<OrderBookData> {
     try {
       // 调用底层 API 获取限价单
       // 注意：API 参数顺序是 (base, quote)，这里 base 是计价货币，quote 是交易标的
       // 所以需要交换 quoteId 和 baseId 的位置
-      const limitOrders = await this.getLimitOrders(tradingPair.quoteId, tradingPair.baseId, limit);
+      const limitOrders = await this.getLimitOrders(
+        tradingPair.quoteId,
+        tradingPair.baseId,
+        limit,
+      );
 
       const bids: OrderBookItem[] = [];
       const asks: OrderBookItem[] = [];
@@ -1686,12 +2019,14 @@ class ChainServiceManager {
         // 例如：HBW/USDT 市场，卖出 USDT 即买入 HBW
         if (base.asset_id === tradingPair.quoteId) {
           // 买单 (Bid): 单价 price = 总花费（计价货币）/ 总数量（交易标的）
-          const valueQuote = Number(base.amount) / tradingPair.quotePrecisionPow;  // 计价货币金额
+          const valueQuote =
+            Number(base.amount) / tradingPair.quotePrecisionPow; // 计价货币金额
           const valueBase = Number(quote.amount) / tradingPair.basePrecisionPow;   // 交易标的数量
           const price = valueQuote / valueBase;  // 价格 = USDT / HBW
 
           // for_sale 是卖出的计价货币数量（如 USDT）
-          const quoteAmount = Number(limitOrder.for_sale) / tradingPair.quotePrecisionPow;
+          const quoteAmount =
+            Number(limitOrder.for_sale) / tradingPair.quotePrecisionPow;
           // 买入的交易标的数量 = 花费 / 单价
           const baseAmount = quoteAmount / price;
 
@@ -1709,11 +2044,13 @@ class ChainServiceManager {
           // 卖单 (Ask): 订单的 sell_price.base 等于交易标的（baseId，如 HBW）
           // 例如：HBW/USDT 市场，卖出 HBW
           const valueBase = Number(base.amount) / tradingPair.basePrecisionPow;    // 交易标的数量
-          const valueQuote = Number(quote.amount) / tradingPair.quotePrecisionPow; // 计价货币金额
+          const valueQuote =
+            Number(quote.amount) / tradingPair.quotePrecisionPow; // 计价货币金额
           const price = valueQuote / valueBase;  // 价格 = USDT / HBW
 
           // for_sale 是卖出的交易标的数量（如 HBW）
-          const baseAmount = Number(limitOrder.for_sale) / tradingPair.basePrecisionPow;
+          const baseAmount =
+            Number(limitOrder.for_sale) / tradingPair.basePrecisionPow;
           // 收到的计价货币数量 = 数量 * 单价
           const quoteAmount = baseAmount * price;
 
@@ -1746,11 +2083,18 @@ class ChainServiceManager {
    * @param limit 查询数量限制
    * @returns 订单簿数据，如果资产不存在则返回空的订单簿
    */
-  public async queryOrderBookBySymbols(baseSymbol: string, quoteSymbol: string, limit: number = 100): Promise<{
+  public async queryOrderBookBySymbols(
+    baseSymbol: string,
+    quoteSymbol: string,
+    limit: number = 100,
+  ): Promise<{
     orderBook: OrderBookData;
     tradingPair: TradingPair | null;
   }> {
-    const tradingPair = await this.buildTradingPairBySymbols(baseSymbol, quoteSymbol);
+    const tradingPair = await this.buildTradingPairBySymbols(
+      baseSymbol,
+      quoteSymbol,
+    );
     if (!tradingPair) {
       return {
         orderBook: { bids: [], asks: [] },
@@ -1766,6 +2110,132 @@ class ChainServiceManager {
   // ============================================================
 
   /**
+   * 创建流动性池。金额使用链上资产 ID，避免在 UI 层耦合精度和序列化细节。
+   */
+  public async createLiquidityPool(
+    params: {
+      accountId: string;
+      assetAId: string;
+      assetBId: string;
+      shareAssetId: string;
+      takerFeePercent?: number;
+      withdrawalFeePercent?: number;
+      feeAssetId?: string;
+    },
+    privateKeyWif: string,
+  ): Promise<any> {
+    await this.ensureConnected();
+    const tr = new TransactionBuilder();
+    tr.add_type_operation('liquidity_pool_create', {
+      fee: { amount: 0, asset_id: params.feeAssetId || '1.3.0' },
+      account: params.accountId,
+      asset_a: params.assetAId,
+      asset_b: params.assetBId,
+      share_asset: params.shareAssetId,
+      taker_fee_percent: params.takerFeePercent || 0,
+      withdrawal_fee_percent: params.withdrawalFeePercent || 0,
+      extensions: [],
+    });
+    await tr.set_required_fees();
+    const pKey = PrivateKey.fromWif(privateKeyWif);
+    tr.add_signer(pKey, pKey.toPublicKey().toPublicKeyString());
+    return tr.broadcast();
+  }
+
+  /** 向池子注入两种储备资产，amount 已按资产精度放大。 */
+  public async depositLiquidity(
+    params: {
+      accountId: string;
+      poolId: string;
+      amountA: number | string;
+      assetAId: string;
+      amountB: number | string;
+      assetBId: string;
+      feeAssetId?: string;
+    },
+    privateKeyWif: string,
+  ): Promise<any> {
+    await this.ensureConnected();
+    const tr = new TransactionBuilder();
+    tr.add_type_operation('liquidity_pool_deposit', {
+      fee: { amount: 0, asset_id: params.feeAssetId || '1.3.0' },
+      account: params.accountId,
+      pool: params.poolId,
+      amount_a: { amount: String(params.amountA), asset_id: params.assetAId },
+      amount_b: { amount: String(params.amountB), asset_id: params.assetBId },
+      extensions: [],
+    });
+    await tr.set_required_fees();
+    const pKey = PrivateKey.fromWif(privateKeyWif);
+    tr.add_signer(pKey, pKey.toPublicKey().toPublicKeyString());
+    return tr.broadcast();
+  }
+
+  /** 从池子提取 LP 份额，shareAmount 已按 LP 资产精度放大。 */
+  public async withdrawLiquidity(
+    params: {
+      accountId: string;
+      poolId: string;
+      shareAmount: number | string;
+      shareAssetId: string;
+      feeAssetId?: string;
+    },
+    privateKeyWif: string,
+  ): Promise<any> {
+    await this.ensureConnected();
+    const tr = new TransactionBuilder();
+    tr.add_type_operation('liquidity_pool_withdraw', {
+      fee: { amount: 0, asset_id: params.feeAssetId || '1.3.0' },
+      account: params.accountId,
+      pool: params.poolId,
+      share_amount: {
+        amount: String(params.shareAmount),
+        asset_id: params.shareAssetId,
+      },
+      extensions: [],
+    });
+    await tr.set_required_fees();
+    const pKey = PrivateKey.fromWif(privateKeyWif);
+    tr.add_signer(pKey, pKey.toPublicKey().toPublicKeyString());
+    return tr.broadcast();
+  }
+
+  /** 与池子兑换，amountToSell/minToReceive 均已按资产精度放大。 */
+  public async exchangeLiquidity(
+    params: {
+      accountId: string;
+      poolId: string;
+      amountToSell: number | string;
+      sellAssetId: string;
+      minToReceive: number | string;
+      receiveAssetId: string;
+      feeAssetId?: string;
+    },
+    privateKeyWif: string,
+  ): Promise<any> {
+    await this.ensureConnected();
+    const tr = new TransactionBuilder();
+    tr.add_type_operation('liquidity_pool_exchange', {
+      fee: { amount: 0, asset_id: params.feeAssetId || '1.3.0' },
+      account: params.accountId,
+      pool: params.poolId,
+      amount_to_sell: {
+        amount: String(params.amountToSell),
+        asset_id: params.sellAssetId,
+      },
+      min_to_receive: {
+        amount: String(params.minToReceive),
+        asset_id: params.receiveAssetId,
+      },
+      extensions: [],
+    });
+    await tr.set_required_fees();
+    const pKey = PrivateKey.fromWif(privateKeyWif);
+    tr.add_signer(pKey, pKey.toPublicKey().toPublicKeyString());
+    return tr.broadcast();
+  }
+
+  /**
    * 创建/调整抵押借贷仓位。
    *
    * DefiShares 借贷沿用 Graphene 的 call_order_update 操作：
@@ -1773,14 +2243,17 @@ class ChainServiceManager {
    * - delta_debt 为正数表示借款，负数表示还款；
    * - 本应用层固定只允许 DFS 作为抵押资产，借款资产由调用方选择。
    */
-  public async updateCallOrder(params: {
+  public async updateCallOrder(
+    params: {
     accountId: string;
     collateralAssetId: string;
     collateralDelta: number | string;
     debtAssetId: string;
     debtDelta: number | string;
     feeAssetId?: string;
-  }, privateKeyWif: string): Promise<any> {
+    },
+    privateKeyWif: string,
+  ): Promise<any> {
     await this.ensureConnected();
 
     const {
@@ -1848,7 +2321,8 @@ class ChainServiceManager {
    * @param privateKeyWif 私钥 WIF 格式
    * @returns 交易结果
    */
-  public async createLimitOrder(params: {
+  public async createLimitOrder(
+    params: {
     accountId: string;
     sellAssetId: string;
     sellAmount: number | string;
@@ -1857,7 +2331,9 @@ class ChainServiceManager {
     expiration?: string;
     fillOrKill?: boolean;
     feeAssetId?: string;
-  }, privateKeyWif: string): Promise<any> {
+    },
+    privateKeyWif: string,
+  ): Promise<any> {
     await this.ensureConnected();
 
     const {
@@ -1874,7 +2350,8 @@ class ChainServiceManager {
     // 默认过期时间为 1 年后
     const defaultExpiration = new Date();
     defaultExpiration.setFullYear(defaultExpiration.getFullYear() + 1);
-    const expirationStr = expiration || defaultExpiration.toISOString().slice(0, 19);
+    const expirationStr =
+      expiration || defaultExpiration.toISOString().slice(0, 19);
 
     const tr = new TransactionBuilder();
 
@@ -1919,18 +2396,17 @@ class ChainServiceManager {
    * @param privateKeyWif 私钥 WIF 格式
    * @returns 交易结果
    */
-  public async cancelLimitOrder(params: {
+  public async cancelLimitOrder(
+    params: {
     accountId: string;
     orderIds: string | string[];
     feeAssetId?: string;
-  }, privateKeyWif: string): Promise<any> {
+    },
+    privateKeyWif: string,
+  ): Promise<any> {
     await this.ensureConnected();
 
-    const {
-      accountId,
-      orderIds,
-      feeAssetId = '1.3.0',
-    } = params;
+    const { accountId, orderIds, feeAssetId = '1.3.0' } = params;
 
     // 支持单个订单 ID 或数组
     const orderIdArray = Array.isArray(orderIds) ? orderIds : [orderIds];
@@ -1962,7 +2438,10 @@ class ChainServiceManager {
 
     // 广播
     const result = await tr.broadcast();
-    console.log(`[ChainService] 批量取消 ${orderIdArray.length} 个限价单成功:`, result);
+    console.log(
+      `[ChainService] 批量取消 ${orderIdArray.length} 个限价单成功:`,
+      result,
+    );
     return result;
   }
 
@@ -1981,7 +2460,8 @@ class ChainServiceManager {
    * @param memoPrivateKey memo 私钥 WIF 格式（用于 memo 加密，可选，默认使用 activePrivateKey）
    * @returns 交易结果
    */
-  public async transfer(params: {
+  public async transfer(
+    params: {
     fromAccountId: string;
     toAccountId: string;
     assetId: string;
@@ -1989,8 +2469,14 @@ class ChainServiceManager {
     memo?: string;
     toMemoKey?: string;
     feeAssetId?: string;
-  }, activePrivateKey: string, memoPrivateKey?: string): Promise<any> {
+    },
+    activePrivateKey: string,
+    memoPrivateKey?: string,
+  ): Promise<any> {
     await this.ensureConnected();
+    // Transfer can be called after a cold start, where LoginScreen has not
+    // set the prefix. Memo public keys on DFS always use the DFS prefix.
+    ChainConfig.setPrefix(DEFI_SHARES_ADDRESS_PREFIX);
 
     const {
       fromAccountId,
@@ -2042,7 +2528,7 @@ class ChainServiceManager {
           memoPrivKey,
           toMemoKey,
           nonce,
-          memoBuffer
+          memoBuffer,
         );
 
         operation.memo = {
@@ -2055,7 +2541,9 @@ class ChainServiceManager {
         console.log('[ChainService] 备注已加密, fromMemoKey:', fromMemoKey);
       } catch (error: any) {
         console.error('[ChainService] 备注加密失败:', error);
-        throw new Error(`备注加密失败：${error.message || '请检查密钥是否正确'}`);
+        throw new Error(
+          `备注加密失败：${error.message || '请检查密钥是否正确'}`,
+        );
       }
     }
 
@@ -2087,23 +2575,36 @@ class ChainServiceManager {
    * @param params.feeAssetId 手续费资产 ID
    * @param privateKeyWif 私钥 WIF 格式
    */
-  public async createBuyOrder(params: {
+  public async createBuyOrder(
+    params: {
     accountId: string;
     tradingPair: TradingPair;
     price: number;
     amount: number;
     isMarketOrder?: boolean;
     feeAssetId?: string;
-  }, privateKeyWif: string): Promise<any> {
-    const { accountId, tradingPair, price, amount, isMarketOrder = false, feeAssetId } = params;
+    },
+    privateKeyWif: string,
+  ): Promise<any> {
+    const {
+      accountId,
+      tradingPair,
+      price,
+      amount,
+      isMarketOrder = false,
+      feeAssetId,
+    } = params;
 
     // 买入：卖出 quote 资产，买入 base 资产
     // sellAmount = amount * price（需要花费的 quote 数量）
     // buyAmount = amount（要买入的 base 数量）
-    const sellAmount = Math.round(amount * price * tradingPair.quotePrecisionPow);
+    const sellAmount = Math.round(
+      amount * price * tradingPair.quotePrecisionPow,
+    );
     const buyAmount = Math.round(amount * tradingPair.basePrecisionPow);
 
-    return this.createLimitOrder({
+    return this.createLimitOrder(
+      {
       accountId,
       sellAssetId: tradingPair.quoteId,
       sellAmount,
@@ -2111,7 +2612,9 @@ class ChainServiceManager {
       buyAmount,
       fillOrKill: isMarketOrder,
       feeAssetId,
-    }, privateKeyWif);
+      },
+      privateKeyWif,
+    );
   }
 
   /**
@@ -2127,23 +2630,36 @@ class ChainServiceManager {
    * @param params.feeAssetId 手续费资产 ID
    * @param privateKeyWif 私钥 WIF 格式
    */
-  public async createSellOrder(params: {
+  public async createSellOrder(
+    params: {
     accountId: string;
     tradingPair: TradingPair;
     price: number;
     amount: number;
     isMarketOrder?: boolean;
     feeAssetId?: string;
-  }, privateKeyWif: string): Promise<any> {
-    const { accountId, tradingPair, price, amount, isMarketOrder = false, feeAssetId } = params;
+    },
+    privateKeyWif: string,
+  ): Promise<any> {
+    const {
+      accountId,
+      tradingPair,
+      price,
+      amount,
+      isMarketOrder = false,
+      feeAssetId,
+    } = params;
 
     // 卖出：卖出 base 资产，买入 quote 资产
     // sellAmount = amount（要卖出的 base 数量）
     // buyAmount = amount * price（期望收到的 quote 数量）
     const sellAmount = Math.round(amount * tradingPair.basePrecisionPow);
-    const buyAmount = Math.round(amount * price * tradingPair.quotePrecisionPow);
+    const buyAmount = Math.round(
+      amount * price * tradingPair.quotePrecisionPow,
+    );
 
-    return this.createLimitOrder({
+    return this.createLimitOrder(
+      {
       accountId,
       sellAssetId: tradingPair.baseId,
       sellAmount,
@@ -2151,7 +2667,9 @@ class ChainServiceManager {
       buyAmount,
       fillOrKill: isMarketOrder,
       feeAssetId,
-    }, privateKeyWif);
+      },
+      privateKeyWif,
+    );
   }
 }
 
@@ -2175,7 +2693,7 @@ const GRAPHENE_ERROR_MESSAGES: Record<string, string> = {
 
   // API/节点相关
   'no method with': '当前API节点版本太低。',
-  'hardfork': '该功能尚未激活，请等待硬分叉升级完毕后再尝试。',
+  hardfork: '该功能尚未激活，请等待硬分叉升级完毕后再尝试。',
 
   // 交易相关
   'now <= trx.expiration': '交易已过期。',
@@ -2187,21 +2705,25 @@ const GRAPHENE_ERROR_MESSAGES: Record<string, string> = {
   'missing required other authority': '签名无效。',
 
   // 资产供应量相关
-  'borrowing this quantity would exceed max_supply': '超过资产最大供应量，交易失败。',
+  'borrowing this quantity would exceed max_supply':
+    '超过资产最大供应量，交易失败。',
 
   // 手续费池相关
   'fee pool balance': '手续费资产对应的手续费池余额不足。',
 
   // 流动性池相关
-  'unable to exchange at expected price': '流动性池价格已经变化，请刷新后再试。',
-  'aborting due to zero outcome': '流动性代币达到最大供应量或者预计获得数量为零。',
+  'unable to exchange at expected price':
+    '流动性池价格已经变化，请刷新后再试。',
+  'aborting due to zero outcome':
+    '流动性代币达到最大供应量或者预计获得数量为零。',
 
   // 对象相关
   'unable to find object': '操作失败，目标已经被删除了。',
 
   // 资产相关
   'non-empty pool': '流动性池非空，无法删除。',
-  'is backed by this asset, can not update precision': '该资产已经被其他资产用作抵押资产，不可修改资产精度。',
+  'is backed by this asset, can not update precision':
+    '该资产已经被其他资产用作抵押资产，不可修改资产精度。',
 
   // 抵押相关
   'initial collateral ratio (icr)': '抵押率不能低于初始抵押率。',
@@ -2240,7 +2762,9 @@ export function formatGrapheneError(error: any): string {
         errorData = JSON.parse(error.message);
       } catch {
         // 如果解析失败，直接使用 message
-        return matchErrorMessage(error.message) || error.message || defaultMessage;
+        return (
+          matchErrorMessage(error.message) || error.message || defaultMessage
+        );
       }
     }
 
@@ -2279,7 +2803,6 @@ export function formatGrapheneError(error: any): string {
     if (rawMessage) {
       return rawMessage;
     }
-
   } catch (e) {
     console.warn('[ChainService] 解析错误信息失败:', e);
   }
@@ -2300,7 +2823,9 @@ function matchErrorMessage(message: string): string | null {
   const lowerMessage = message.toLowerCase();
 
   // 遍历错误消息映射表
-  for (const [pattern, friendlyMessage] of Object.entries(GRAPHENE_ERROR_MESSAGES)) {
+  for (const [pattern, friendlyMessage] of Object.entries(
+    GRAPHENE_ERROR_MESSAGES,
+  )) {
     if (lowerMessage.includes(pattern.toLowerCase())) {
       return friendlyMessage;
     }

@@ -6,6 +6,7 @@
 import { create } from 'zustand';
 import type { AccountInfo, StoredAccountsData } from '../types';
 import { localCacheManager } from '../services/local_cache_mgr';
+import { unlockSession } from '../services/unlock_session';
 
 // 生成随机头像颜色
 const generateAvatarColor = (): string => {
@@ -201,6 +202,8 @@ export const useAccountStore = create<AccountState>((set, get) => ({
     const { accounts, currentAccount } = get();
     const updatedAccounts = accounts.filter(acc => acc.id !== accountId);
 
+    unlockSession.clear(accountId);
+
     // 如果删除的是当前账号，切换到其他账号或清空
     let newCurrentAccount = currentAccount;
     if (currentAccount?.id === accountId) {
@@ -252,7 +255,9 @@ export const useAccountStore = create<AccountState>((set, get) => ({
 
   // 登出当前账号
   logout: async () => {
-    const { accounts } = get();
+    const { accounts, currentAccount } = get();
+
+    if (currentAccount) unlockSession.clear(currentAccount.id);
 
     set({ currentAccount: null });
 
@@ -268,6 +273,7 @@ export const useAccountStore = create<AccountState>((set, get) => ({
 
   // 清除所有账号数据
   clearAllAccounts: async () => {
+    unlockSession.clear();
     set({
       accounts: [],
       currentAccount: null,
@@ -291,4 +297,3 @@ export const useAccountStore = create<AccountState>((set, get) => ({
 }));
 
 export default useAccountStore;
-

@@ -60,6 +60,8 @@ export interface AssetObject {
   dynamic_asset_data_id?: string;
   /** 智能资产数据 ID（可选，仅智能资产有） */
   bitasset_data_id?: string;
+  /** LP 份额资产对应的流动性池 ID。 */
+  for_liquidity_pool?: string;
 }
 
 /**
@@ -1135,4 +1137,3 @@ export interface IChainAppCommonSettingsV1 {
 }
 
 export type IChainAppSettings = IChainAppCommonSettingsV1;
-
