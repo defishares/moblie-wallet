@@ -32,6 +32,14 @@ export default defineConfig(({ mode }) => {
   },
   build: {
     sourcemap: true,
+    // bitsharesjs publishes an ES entry that still contains CommonJS
+    // `require()` calls (notably for safe-buffer). Rollup otherwise leaves
+    // those calls in the browser bundle, causing `require is not defined`
+    // before React can mount in production.
+    commonjsOptions: {
+      include: [/node_modules/],
+      transformMixedEsModules: true,
+    },
     rollupOptions: {
       plugins: [{
         name: 'defishares-release-manifest',
