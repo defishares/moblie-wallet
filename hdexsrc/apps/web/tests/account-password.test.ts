@@ -5,6 +5,7 @@ import * as BitsharesWs from 'bitsharesjs-ws';
 import { authenticateAccountPassword } from '../src/auth/accountPassword';
 import { signTransferPreview } from '../src/services/transferSigning';
 import { formatGrapheneError } from '../src/services/grapheneError';
+import { validatePin } from '../src/auth/pinVault';
 
 const makeClient = (account: unknown) => ({
   isConnected: true,
@@ -83,4 +84,12 @@ test('encrypts a UTF-8 memo using the RN transfer format', async () => {
 test('maps Graphene broadcast errors to RN-compatible messages', () => {
   assert.equal(formatGrapheneError(new Error('duplicate transaction')), '该交易已存在，不用重复广播。');
   assert.equal(formatGrapheneError(new Error('missing required active authority')), '签名无效。');
+});
+
+test('requires a strong local PIN for devices without Passkey', () => {
+  assert.match(validatePin('short') || '', /必须为 10 位/);
+  assert.match(validatePin('lowercase1') || '', /大写字母/);
+  assert.match(validatePin('UPPERCASE1') || '', /小写字母/);
+  assert.match(validatePin('Aa12345678') || '', /特殊字符/);
+  assert.equal(validatePin('Abcdefghi!'), null);
 });

@@ -4,6 +4,7 @@ import { RNScreenHeader } from '../components/RNScreenHeader';
 import { webSocketNodes } from '../services/runtime';
 import { useAuth } from '../state/AuthProvider';
 import { useChain } from '../state/ChainProvider';
+import { validatePin } from '../auth/pinVault';
 
 type IconName = 'logout' | 'account' | 'server' | 'fingerprint' | 'clock' | 'trash' | 'info' | 'about' | 'copy' | 'plus' | 'close';
 
@@ -50,16 +51,21 @@ function nodeLabel(url: string) {
 export function SettingsPage() {
   const navigate = useNavigate();
   const { connectedUrl, status, error, storage, customNodes, switchNode, addCustomNode, removeCustomNode } = useChain();
-  const { session, logout, biometricSupported, hasBiometricVault, setupBiometricVault, removeBiometricVault, signingKeyTimeoutMinutes, setSigningKeyTimeoutMinutes } = useAuth();
+  const { session, logout, biometricSupported, pinSupported, hasBiometricVault, hasPinVault, setupBiometricVault, setupPinVault, removeBiometricVault, removePinVault, signingKeyTimeoutMinutes, setSigningKeyTimeoutMinutes } = useAuth();
   const [nodeSheetOpen, setNodeSheetOpen] = useState(false);
   const [addNodeOpen, setAddNodeOpen] = useState(false);
   const [nodeUrl, setNodeUrl] = useState('');
   const [busyNode, setBusyNode] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
   const [actionError, setActionError] = useState('');
-  const [confirmAction, setConfirmAction] = useState<'logout' | 'delete' | 'cache' | 'vault' | null>(null);
+  const [confirmAction, setConfirmAction] = useState<'logout' | 'delete' | 'cache' | 'vault' | 'pinVault' | null>(null);
   const [deviceVaultReady, setDeviceVaultReady] = useState(false);
+  const [pinVaultReady, setPinVaultReady] = useState(false);
   const [deviceBusy, setDeviceBusy] = useState(false);
+  const [pinSheetOpen, setPinSheetOpen] = useState(false);
+  const [pinDraft, setPinDraft] = useState('');
+  const [pinConfirm, setPinConfirm] = useState('');
+  const [pinError, setPinError] = useState('');
   const [timeoutSheetOpen, setTimeoutSheetOpen] = useState(false);
   const [timeoutDraft, setTimeoutDraft] = useState(String(signingKeyTimeoutMinutes));
 
@@ -82,6 +88,20 @@ export function SettingsPage() {
     });
     return () => { cancelled = true; };
   }, [biometricSupported, hasBiometricVault, session]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!session || !pinSupported) {
+      setPinVaultReady(false);
+      return () => { cancelled = true; };
+    }
+    void hasPinVault(session.account.name).then(ready => {
+      if (!cancelled) setPinVaultReady(ready);
+    }).catch(() => {
+      if (!cancelled) setPinVaultReady(false);
+    });
+    return () => { cancelled = true; };
+  }, [hasPinVault, pinSupported, session]);
 
   const showNotice = (text: string) => {
     setActionError('');
@@ -166,6 +186,32 @@ export function SettingsPage() {
     }
   };
 
+  const openPinSetup = () => {
+    setPinDraft('');
+    setPinConfirm('');
+    setPinError('');
+    setPinSheetOpen(true);
+  };
+
+  const savePin = async () => {
+    if (!session) return;
+    const validationError = validatePin(pinDraft);
+    if (validationError) { setPinError(validationError); return; }
+    if (pinDraft !== pinConfirm) { setPinError('两次输入的 PIN 不一致'); return; }
+    setDeviceBusy(true);
+    setPinError('');
+    try {
+      await setupPinVault(pinDraft, session);
+      setPinVaultReady(true);
+      setPinSheetOpen(false);
+      showNotice('PIN 已启用，私钥已加密保存在本设备');
+    } catch (cause) {
+      setPinError(cause instanceof Error ? cause.message : 'PIN 设置失败，请重试');
+    } finally {
+      setDeviceBusy(false);
+    }
+  };
+
   const openTimeoutSheet = () => {
     setTimeoutDraft(String(signingKeyTimeoutMinutes));
     setTimeoutSheetOpen(true);
@@ -202,6 +248,14 @@ export function SettingsPage() {
       }
       return;
     }
+    if (action === 'pinVault') {
+      if (session) {
+        await removePinVault(session.account.id);
+        setPinVaultReady(false);
+        showNotice('PIN 已关闭，本地密钥密文已删除');
+      }
+      return;
+    }
     if (action === 'logout' || action === 'delete') {
       if (action === 'delete' && session) await removeBiometricVault(session.account.id);
       logout();
@@ -215,6 +269,8 @@ export function SettingsPage() {
       ? { title: '注销账号', body: `将从本浏览器会话移除“${session?.account.name || ''}”及签名密钥。链上账号不会被删除。`, button: '继续注销' }
       : confirmAction === 'vault'
         ? { title: '关闭设备验证', body: '将删除本设备上的加密私钥密文。关闭后仍可使用账户密码登录，不会影响链上账户。', button: '关闭设备验证' }
+        : confirmAction === 'pinVault'
+          ? { title: '关闭 PIN 保护', body: '将删除本设备上的 PIN 加密私钥密文。关闭后需要重新登录并设置 PIN。', button: '关闭 PIN 保护' }
       : { title: '清除缓存', body: '确定要清除所有本地缓存数据吗？此操作不可恢复，但不会删除当前登录会话。', button: '确定' };
 
   return (
@@ -241,16 +297,22 @@ export function SettingsPage() {
           <div className="rn-settings-list">
             <SettingRow
               icon="fingerprint"
-              title="设备验证解锁"
-              subtitle={!biometricSupported ? '需要 HTTPS/localhost 和支持 PRF 的浏览器' : deviceVaultReady ? '已启用：私钥以加密密文保存在本设备' : '使用指纹、面容或系统设备验证保护本地私钥'}
-              right={biometricSupported ? <span className={deviceVaultReady ? 'rn-settings-enabled' : 'rn-settings-unavailable'}>{deviceVaultReady ? '已启用' : '未启用'}</span> : <span className="rn-settings-unavailable">不支持</span>}
-              onClick={deviceVaultReady ? () => setConfirmAction('vault') : () => void setupDeviceUnlock()}
-              disabled={!biometricSupported || deviceBusy}
+              title={biometricSupported ? '设备验证解锁' : 'PIN 解锁'}
+              subtitle={biometricSupported
+                ? deviceVaultReady ? '已启用：私钥以加密密文保存在本设备' : '使用指纹、面容或系统设备验证保护本地私钥'
+                : pinSupported ? pinVaultReady ? '已启用：私钥以 PIN 加密保存在本设备' : '当前设备不支持 Passkey，请设置 PIN 保护本地私钥' : '当前设备不支持本地安全加密'}
+              right={biometricSupported
+                ? <span className={deviceVaultReady ? 'rn-settings-enabled' : 'rn-settings-unavailable'}>{deviceVaultReady ? '已启用' : '未启用'}</span>
+                : <span className={pinVaultReady ? 'rn-settings-enabled' : 'rn-settings-unavailable'}>{pinSupported ? pinVaultReady ? '已启用' : '未设置' : '不支持'}</span>}
+              onClick={biometricSupported
+                ? deviceVaultReady ? () => setConfirmAction('vault') : () => void setupDeviceUnlock()
+                : pinVaultReady ? () => setConfirmAction('pinVault') : openPinSetup}
+              disabled={(!biometricSupported && !pinSupported) || deviceBusy}
             />
             <SettingRow
               icon="clock"
               title="签名验证有效期"
-              subtitle="Passkey 验证成功后，在此时间内复用本次解锁"
+              subtitle="设备验证或 PIN 解锁成功后，在此时间内复用本次解锁"
               right={<span className="rn-settings-version">{signingKeyTimeoutMinutes} 分钟</span>}
               onClick={openTimeoutSheet}
             />
@@ -320,6 +382,19 @@ export function SettingsPage() {
           <input className="rn-settings-duration-range" type="range" min="5" max="600" step="1" value={Math.max(5, Math.min(600, Number(timeoutDraft) || 5))} onChange={event => setTimeoutDraft(event.target.value)} aria-label="调整有效期" />
           <div className="rn-settings-duration-scale"><span>5 分钟</span><span>600 分钟</span></div>
           <div className="rn-settings-duration-actions"><button type="button" onClick={() => setTimeoutSheetOpen(false)}>取消</button><button type="button" onClick={() => void saveTimeout()}>保存</button></div>
+        </section>
+      </div>}
+
+      {pinSheetOpen && <div className="rn-settings-backdrop centered" role="presentation" onMouseDown={event => event.currentTarget === event.target && setPinSheetOpen(false)}>
+        <section className="rn-settings-duration-modal" role="dialog" aria-modal="true" aria-labelledby="settings-pin-title">
+          <header><h2 id="settings-pin-title">设置本地 PIN</h2><button type="button" onClick={() => setPinSheetOpen(false)} aria-label="关闭"><SettingIcon name="close" /></button></header>
+          <p>PIN 必须为 10 位，并包含大写字母、小写字母和特殊字符。PIN 只用于解密本设备上的私钥。</p>
+          <label className="rn-login-pin-label" htmlFor="settings-pin">PIN</label>
+          <input id="settings-pin" className="rn-login-pin-input" type="password" value={pinDraft} onChange={event => { setPinDraft(event.target.value); setPinError(''); }} autoComplete="new-password" disabled={deviceBusy} />
+          <label className="rn-login-pin-label" htmlFor="settings-pin-confirm">确认 PIN</label>
+          <input id="settings-pin-confirm" className="rn-login-pin-input" type="password" value={pinConfirm} onChange={event => { setPinConfirm(event.target.value); setPinError(''); }} autoComplete="new-password" disabled={deviceBusy} />
+          {pinError && <p className="rn-add-node-error">{pinError}</p>}
+          <div className="rn-settings-duration-actions"><button type="button" onClick={() => setPinSheetOpen(false)}>取消</button><button type="button" onClick={() => void savePin()}>{deviceBusy ? '保存中…' : '保存 PIN'}</button></div>
         </section>
       </div>}
 

@@ -371,6 +371,9 @@ body { background: #0d0d0d; color: #fff; }
 .rn-login-modal .rn-login-submit { width: 100%; }
 .rn-login-modal .rn-login-device-error { padding: 10px 12px; border-radius: 8px; background: rgba(255,107,107,.1); text-align: left; }
 .rn-login-modal-skip { min-height: 42px; margin-top: 8px; border: 0; color: #888; background: transparent; font-size: 13px; }
+.rn-login-pin-label { display: block; margin-top: 14px; color: #999; font-size: 12px; text-align: left; }
+.rn-login-pin-input { width: 100%; min-height: 44px; margin-top: 6px; padding: 0 12px; border: 1px solid #3a3a3a; border-radius: 8px; outline: 0; color: #fff; background: #0d0d0d; font-size: 15px; letter-spacing: .08em; }
+.rn-login-pin-input:focus { border-color: #00d094; box-shadow: 0 0 0 3px rgba(0,208,148,.1); }
 @media (min-width: 681px) { .rn-login-page { width: min(100%, 680px) !important; max-width: 680px !important; margin-right: auto; margin-left: auto; } }
 
 /* Secondary screens follow the same RN screen rhythm as Home and Markets. */
