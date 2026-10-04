@@ -164,6 +164,17 @@ export async function hasBiometricVault(accountName: string): Promise<boolean> {
   return Boolean(accountId && await storage.get<VaultRecord>(recordKey(accountId)));
 }
 
+/** Returns only account names, never private key material. */
+export async function listBiometricVaultAccounts(): Promise<string[]> {
+  if (!isBiometricVaultSupported()) return [];
+  const index = await readIndex();
+  const accounts = await Promise.all(Object.entries(index).map(async ([name, accountId]) => {
+    const record = await storage.get<VaultRecord>(recordKey(accountId));
+    return record && record.version === VAULT_VERSION ? record.accountName || name : null;
+  }));
+  return accounts.filter((name): name is string => Boolean(name));
+}
+
 export async function registerBiometricVault(session: WebWalletSession): Promise<void> {
   assertEnvironment();
   const salt = randomBytes(32);

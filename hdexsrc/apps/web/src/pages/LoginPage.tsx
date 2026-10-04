@@ -9,7 +9,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { error: nodeError } = useChain();
-  const { login, biometricLogin, setupBiometricVault, hasBiometricVault, biometricSupported } = useAuth();
+  const { login, biometricLogin, setupBiometricVault, hasBiometricVault, biometricSupported, biometricRestorePending, autoRestored, isAuthenticated } = useAuth();
   const registeredName = (location.state as { registered?: string } | null)?.registered || '';
   const [loginType, setLoginType] = useState<LoginType>('account');
   const [accountName, setAccountName] = useState(registeredName);
@@ -22,6 +22,11 @@ export function LoginPage() {
   const [checkingVault, setCheckingVault] = useState(false);
   const [pendingSession, setPendingSession] = useState<Awaited<ReturnType<typeof login>> | null>(null);
   const destination = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname || '/';
+  const continueAfterLogin = () => navigate(destination, { replace: true });
+
+  useEffect(() => {
+    if (autoRestored && isAuthenticated) continueAfterLogin();
+  }, [autoRestored, isAuthenticated]);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,8 +45,6 @@ export function LoginPage() {
     });
     return () => { cancelled = true; };
   }, [accountName, biometricSupported, hasBiometricVault]);
-
-  const continueAfterLogin = () => navigate(destination, { replace: true });
 
   const readableDeviceError = (cause: unknown) => {
     if (cause instanceof DOMException && cause.name === 'NotAllowedError') return '设备验证已取消，可继续使用账户密码登录';
@@ -99,6 +102,7 @@ export function LoginPage() {
   const errorMessage = error || (!error && nodeError ? `节点连接异常：${nodeError}` : '');
   return (
     <main className="auth-page rn-login-page">
+      {biometricRestorePending && <div className="rn-login-restore-status" role="status"><span className="rn-login-restore-spinner" />正在验证本机设备…</div>}
       <h1 className="rn-login-title">钱包登录</h1>
       <nav className="rn-login-tabs" aria-label="登录方式">
         <button type="button" className={loginType === 'account' ? 'active' : ''} onClick={() => setLoginType('account')}>账户名登录</button>

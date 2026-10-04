@@ -1,9 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useChain } from './ChainProvider';
 import type { WebWalletSession } from '../auth/accountPassword';
 import {
   hasBiometricVault as hasStoredBiometricVault,
   isBiometricVaultSupported,
+  listBiometricVaultAccounts,
   registerBiometricVault,
   removeBiometricVault,
   unlockBiometricVault,
@@ -19,17 +21,54 @@ interface AuthContextValue {
   hasBiometricVault: (accountName: string) => Promise<boolean>;
   removeBiometricVault: (accountId: string) => Promise<void>;
   biometricSupported: boolean;
+  biometricRestorePending: boolean;
+  autoRestored: boolean;
   logout: () => void;
   switchAccount: (accountId: string) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+const EXPLICIT_LOGOUT_KEY = 'defishares-web-explicit-logout.v1';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const { authenticateAccount } = useChain();
+  const location = useLocation();
   const [session, setSession] = useState<WebWalletSession | null>(null);
   const [accounts, setAccounts] = useState<WebWalletSession[]>([]);
   const biometricSupported = isBiometricVaultSupported();
+  const [biometricRestorePending, setBiometricRestorePending] = useState(false);
+  const [autoRestored, setAutoRestored] = useState(false);
+
+  useEffect(() => {
+    if (!biometricSupported || session || location.pathname === '/register' || location.pathname === '/webview') {
+      setBiometricRestorePending(false);
+      return;
+    }
+    if (window.sessionStorage.getItem(EXPLICIT_LOGOUT_KEY) === '1') {
+      setBiometricRestorePending(false);
+      return;
+    }
+    let cancelled = false;
+    setBiometricRestorePending(true);
+    void listBiometricVaultAccounts().then(async names => {
+      // With multiple local accounts, leave account selection to the login page.
+      // A single vault can be restored without asking for an account password.
+      if (names.length !== 1) return;
+      try {
+        const nextSession = await unlockBiometricVault(names[0]);
+        if (cancelled) return;
+        setAccounts([nextSession]);
+        setSession(nextSession);
+        setAutoRestored(true);
+        window.sessionStorage.removeItem(EXPLICIT_LOGOUT_KEY);
+      } catch {
+        // Cancelled or unavailable device verification leaves the password form usable.
+      }
+    }).catch(() => undefined).finally(() => {
+      if (!cancelled) setBiometricRestorePending(false);
+    });
+    return () => { cancelled = true; };
+  }, [biometricSupported, location.pathname, session]);
   useEffect(() => {
     if (!session) return;
     const ttl = 60 * 60 * 1000;
@@ -42,6 +81,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(async (accountName: string, password: string) => {
     const nextSession = await authenticateAccount(accountName, password);
+    window.sessionStorage.removeItem(EXPLICIT_LOGOUT_KEY);
+    setAutoRestored(false);
     setAccounts(current => [...current.filter(item => item.account.id !== nextSession.account.id), nextSession]);
     setSession(nextSession);
     return nextSession;
@@ -49,6 +90,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const biometricLogin = useCallback(async (accountName: string) => {
     const nextSession = await unlockBiometricVault(accountName);
+    window.sessionStorage.removeItem(EXPLICIT_LOGOUT_KEY);
+    setAutoRestored(false);
     setAccounts(current => [...current.filter(item => item.account.id !== nextSession.account.id), nextSession]);
     setSession(nextSession);
     return nextSession;
@@ -67,6 +110,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // out drops the signing material; nothing is persisted in IndexedDB.
     setAccounts([]);
     setSession(null);
+    setAutoRestored(false);
+    window.sessionStorage.setItem(EXPLICIT_LOGOUT_KEY, '1');
   }, []);
   const switchAccount = useCallback((accountId: string) => { setSession(current => accounts.find(item => item.account.id === accountId) ?? current); }, [accounts]);
 
@@ -80,9 +125,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     hasBiometricVault,
     removeBiometricVault: deleteBiometricVault,
     biometricSupported,
+    biometricRestorePending,
+    autoRestored,
     logout,
     switchAccount,
-  }), [accounts, biometricLogin, biometricSupported, deleteBiometricVault, hasBiometricVault, login, logout, session, setupBiometricVault, switchAccount]);
+  }), [accounts, autoRestored, biometricLogin, biometricRestorePending, biometricSupported, deleteBiometricVault, hasBiometricVault, login, logout, session, setupBiometricVault, switchAccount]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
