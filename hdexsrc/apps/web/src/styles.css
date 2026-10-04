@@ -149,6 +149,9 @@ body { background: #0d0d0d; color: #fff; }
 .icon-button { width: 22px; height: 22px; color: #666; background: transparent; }
 .icon-button svg { width: 20px; height: 20px; }
 .rn-icon-button svg { width: 23px; height: 23px; }
+.rn-home-settings-icon svg { width: 27px; height: 27px; }
+.rn-lock-button.unlocked { color: #00d094; }
+.rn-lock-button:disabled { opacity: .65; cursor: wait; }
 .rn-home-actions { position: absolute; top: 16px; right: 20px; display: flex; align-items: center; gap: 6px; }
 .rn-pill-button { display: inline-flex; align-items: center; min-height: 36px; padding: 8px 10px; border: 1px solid #333; border-radius: 20px; color: #fff; font-size: 14px; font-weight: 600; }
 .rn-pill-button.primary { color: #000; border-color: #fff; background: #fff; }

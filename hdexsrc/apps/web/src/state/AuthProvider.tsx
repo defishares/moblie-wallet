@@ -22,6 +22,7 @@ interface AuthContextValue {
   setupBiometricVault: (walletSession?: WebWalletSession) => Promise<void>;
   hasBiometricVault: (accountName: string) => Promise<boolean>;
   ensureSigningKey: () => Promise<WebWalletSession>;
+  signingKeyUnlocked: boolean;
   signingKeyTimeoutMinutes: number;
   setSigningKeyTimeoutMinutes: (minutes: number) => Promise<void>;
   removeBiometricVault: (accountId: string) => Promise<void>;
@@ -166,6 +167,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setupBiometricVault,
     hasBiometricVault,
     ensureSigningKey,
+    signingKeyUnlocked: Boolean(session?.privateKeyWif && signingKeyUnlockedAt != null),
     signingKeyTimeoutMinutes,
     setSigningKeyTimeoutMinutes,
     removeBiometricVault: deleteBiometricVault,
@@ -174,7 +176,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     lastAccountName,
     logout,
     switchAccount,
-  }), [accounts, biometricLogin, biometricSupported, deleteBiometricVault, ensureSigningKey, hasBiometricVault, lastAccountName, login, logout, session, sessionHydrated, setSigningKeyTimeoutMinutes, signingKeyTimeoutMinutes, setupBiometricVault, switchAccount]);
+  }), [accounts, biometricLogin, biometricSupported, deleteBiometricVault, ensureSigningKey, hasBiometricVault, lastAccountName, login, logout, session, sessionHydrated, setSigningKeyTimeoutMinutes, signingKeyTimeoutMinutes, signingKeyUnlockedAt, setupBiometricVault, switchAccount]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
