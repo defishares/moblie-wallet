@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { RNScreenHeader } from '../components/RNScreenHeader';
 import { webSocketNodes } from '../services/runtime';
@@ -49,20 +49,36 @@ function nodeLabel(url: string) {
 export function SettingsPage() {
   const navigate = useNavigate();
   const { connectedUrl, status, error, storage, customNodes, switchNode, addCustomNode, removeCustomNode } = useChain();
-  const { session, logout } = useAuth();
+  const { session, logout, biometricSupported, hasBiometricVault, setupBiometricVault, removeBiometricVault } = useAuth();
   const [nodeSheetOpen, setNodeSheetOpen] = useState(false);
   const [addNodeOpen, setAddNodeOpen] = useState(false);
   const [nodeUrl, setNodeUrl] = useState('');
   const [busyNode, setBusyNode] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
   const [actionError, setActionError] = useState('');
-  const [confirmAction, setConfirmAction] = useState<'logout' | 'delete' | 'cache' | null>(null);
+  const [confirmAction, setConfirmAction] = useState<'logout' | 'delete' | 'cache' | 'vault' | null>(null);
+  const [deviceVaultReady, setDeviceVaultReady] = useState(false);
+  const [deviceBusy, setDeviceBusy] = useState(false);
 
   const officialNodes = useMemo(() => [...new Set(webSocketNodes)], []);
   const currentNodeName = connectedUrl ? nodeLabel(connectedUrl) : '未连接';
   const connectionText = status === 'connected'
     ? `已连接: ${connectedUrl}`
     : status === 'connecting' ? '正在连接节点…' : error || '节点连接异常';
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!session || !biometricSupported) {
+      setDeviceVaultReady(false);
+      return () => { cancelled = true; };
+    }
+    void hasBiometricVault(session.account.name).then(ready => {
+      if (!cancelled) setDeviceVaultReady(ready);
+    }).catch(() => {
+      if (!cancelled) setDeviceVaultReady(false);
+    });
+    return () => { cancelled = true; };
+  }, [biometricSupported, hasBiometricVault, session]);
 
   const showNotice = (text: string) => {
     setActionError('');
@@ -127,6 +143,26 @@ export function SettingsPage() {
     showNotice('节点已删除');
   };
 
+  const deviceErrorMessage = (cause: unknown) => {
+    if (cause instanceof DOMException && cause.name === 'NotAllowedError') return '设备验证已取消';
+    return cause instanceof Error ? cause.message : '设备验证失败，请重试';
+  };
+
+  const setupDeviceUnlock = async () => {
+    if (!session || deviceBusy) return;
+    setDeviceBusy(true);
+    setActionError('');
+    try {
+      await setupBiometricVault(session);
+      setDeviceVaultReady(true);
+      showNotice('设备验证已启用，私钥已加密保存在本设备');
+    } catch (cause) {
+      setActionError(deviceErrorMessage(cause));
+    } finally {
+      setDeviceBusy(false);
+    }
+  };
+
   const finishConfirm = async () => {
     const action = confirmAction;
     setConfirmAction(null);
@@ -139,7 +175,16 @@ export function SettingsPage() {
       }
       return;
     }
+    if (action === 'vault') {
+      if (session) {
+        await removeBiometricVault(session.account.id);
+        setDeviceVaultReady(false);
+        showNotice('设备验证已关闭，本地密钥密文已删除');
+      }
+      return;
+    }
     if (action === 'logout' || action === 'delete') {
+      if (action === 'delete' && session) await removeBiometricVault(session.account.id);
       logout();
       navigate('/login', { replace: true });
     }
@@ -149,6 +194,8 @@ export function SettingsPage() {
     ? { title: '退出登录', body: '退出后可使用账户名和账户密码再次登录。', button: '退出登录' }
     : confirmAction === 'delete'
       ? { title: '注销账号', body: `将从本浏览器会话移除“${session?.account.name || ''}”及签名密钥。链上账号不会被删除。`, button: '继续注销' }
+      : confirmAction === 'vault'
+        ? { title: '关闭设备验证', body: '将删除本设备上的加密私钥密文。关闭后仍可使用账户密码登录，不会影响链上账户。', button: '关闭设备验证' }
       : { title: '清除缓存', body: '确定要清除所有本地缓存数据吗？此操作不可恢复，但不会删除当前登录会话。', button: '确定' };
 
   return (
@@ -173,7 +220,14 @@ export function SettingsPage() {
         {session && <section className="rn-settings-section">
           <h2>安全设置</h2>
           <div className="rn-settings-list">
-            <SettingRow icon="fingerprint" title="生物识别解锁" subtitle="Web 端不提供设备级生物识别" right={<span className="rn-settings-unavailable">不支持</span>} disabled />
+            <SettingRow
+              icon="fingerprint"
+              title="设备验证解锁"
+              subtitle={!biometricSupported ? '需要 HTTPS/localhost 和支持 PRF 的浏览器' : deviceVaultReady ? '已启用：私钥以加密密文保存在本设备' : '使用指纹、面容或系统设备验证保护本地私钥'}
+              right={biometricSupported ? <span className={deviceVaultReady ? 'rn-settings-enabled' : 'rn-settings-unavailable'}>{deviceVaultReady ? '已启用' : '未启用'}</span> : <span className="rn-settings-unavailable">不支持</span>}
+              onClick={deviceVaultReady ? () => setConfirmAction('vault') : () => void setupDeviceUnlock()}
+              disabled={!biometricSupported || deviceBusy}
+            />
           </div>
         </section>}
 

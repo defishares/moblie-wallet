@@ -346,6 +346,9 @@ body { background: #0d0d0d; color: #fff; }
 .rn-login-hint { margin: -12px 0 0; color: #666; font-size: 12px; line-height: 18px; }
 .rn-login-submit { min-height: 52px; margin-top: 16px; border: 1px solid #333; border-radius: 8px; color: #fff; background: #1a1a1a; font-size: 16px; font-weight: 600; }
 .rn-login-submit:disabled { color: #aaa; background: #333; }
+.rn-login-device { min-height: 48px; margin-top: 10px; border: 1px solid rgba(0,208,148,.35); border-radius: 8px; color: #00d094; background: rgba(0,208,148,.06); font-size: 14px; font-weight: 600; }
+.rn-login-device:disabled { cursor: not-allowed; opacity: .55; }
+.rn-login-device-error { margin: 10px 0 0; color: #ff9da8; font-size: 12px; line-height: 1.5; }
 .rn-login-error { display: flex; align-items: center; gap: 8px; padding: 12px 16px; margin-bottom: 16px; border-radius: 8px; color: #ff6b6b; background: rgba(255,107,107,.1); font-size: 14px; }
 .rn-login-placeholder { display: flex; min-height: 310px; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
 .rn-login-placeholder > span { color: #333; font-size: 48px; line-height: 1; }
@@ -353,6 +356,14 @@ body { background: #0d0d0d; color: #fff; }
 .rn-login-placeholder small { color: #444; font-size: 14px; }
 .rn-login-divider { height: 1px; margin-top: 32px; background: #1a1a1a; }
 .rn-login-create { display: block; padding: 16px 0; margin-top: 24px; color: #00d094; font-size: 16px; font-weight: 600; text-align: center; }
+.rn-login-modal-backdrop { position: fixed; z-index: 90; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.72); }
+.rn-login-modal { width: min(100%, 390px); padding: 28px 22px 20px; border: 1px solid #303030; border-radius: 18px; background: #171717; box-shadow: 0 20px 70px rgba(0,0,0,.55); text-align: center; }
+.rn-login-modal-icon { display: grid; width: 52px; height: 52px; place-items: center; margin: 0 auto 14px; border-radius: 50%; color: #07110f; background: #00d094; font-size: 30px; font-weight: 800; }
+.rn-login-modal h2 { margin: 0 0 10px; color: #fff; font-size: 20px; }
+.rn-login-modal p { margin: 0; color: #999; font-size: 13px; line-height: 1.65; text-align: left; }
+.rn-login-modal .rn-login-submit { width: 100%; }
+.rn-login-modal .rn-login-device-error { padding: 10px 12px; border-radius: 8px; background: rgba(255,107,107,.1); text-align: left; }
+.rn-login-modal-skip { min-height: 42px; margin-top: 8px; border: 0; color: #888; background: transparent; font-size: 13px; }
 @media (min-width: 681px) { .rn-login-page { width: min(100%, 680px) !important; max-width: 680px !important; margin-right: auto; margin-left: auto; } }
 
 /* Secondary screens follow the same RN screen rhythm as Home and Markets. */
@@ -921,6 +932,7 @@ body { background: #0d0d0d; color: #fff; }
 .rn-settings-row-right em { max-width: 110px; overflow: hidden; color: #999; font-size: 13px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 .rn-settings-row-right em.connected { color: #00d094; }
 .rn-settings-unavailable { padding: 4px 8px; border-radius: 5px; color: #666; background: #252525; font-size: 11px; }
+.rn-settings-enabled { padding: 4px 8px; border-radius: 5px; color: #00d094; background: rgba(0,208,148,.12); font-size: 11px; }
 .rn-settings-version { color: #888; font-size: 14px; }
 .rn-settings-toast { position: fixed; z-index: 80; bottom: 78px; left: 50%; max-width: calc(100% - 32px); transform: translateX(-50%); padding: 11px 17px; border-radius: 22px; color: #fff; background: #333; box-shadow: 0 8px 24px rgba(0,0,0,.35); font-size: 13px; text-align: center; }
 .rn-settings-toast.error { color: #ffb3b3; background: #3a2022; }
