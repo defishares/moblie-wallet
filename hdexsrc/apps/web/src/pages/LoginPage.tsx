@@ -25,8 +25,12 @@ export function LoginPage() {
   const continueAfterLogin = () => navigate(destination, { replace: true });
 
   useEffect(() => {
-    if (sessionHydrated && isAuthenticated && !pendingSession) continueAfterLogin();
-  }, [isAuthenticated, pendingSession, sessionHydrated]);
+    // Password login first updates AuthProvider's in-memory identity, then
+    // checks whether this account has a vault. Do not let this restore
+    // redirect race that check and unmount the page before the Passkey setup
+    // prompt can be shown.
+    if (sessionHydrated && isAuthenticated && !pendingSession && !busy) continueAfterLogin();
+  }, [busy, isAuthenticated, pendingSession, sessionHydrated]);
 
   useEffect(() => {
     if (sessionHydrated && !accountName && lastAccountName) setAccountName(lastAccountName);
