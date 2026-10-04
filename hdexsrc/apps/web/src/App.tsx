@@ -23,10 +23,10 @@ import { WebViewPage } from './pages/WebViewPage';
 import { TransactionHistoryPage } from './pages/TransactionHistoryPage';
 
 function RequireAuth() {
-  const { isAuthenticated, biometricRestorePending } = useAuth();
+  const { isAuthenticated, sessionHydrated } = useAuth();
   const location = useLocation();
-  if (!isAuthenticated && biometricRestorePending) {
-    return <main className="rn-auth-restore-page"><span className="rn-login-restore-spinner" />正在验证本机设备…</main>;
+  if (!isAuthenticated && !sessionHydrated) {
+    return <main className="rn-auth-restore-page"><span className="rn-login-restore-spinner" />正在恢复本地登录状态…</main>;
   }
   return isAuthenticated ? <Outlet /> : <Navigate to="/login" replace state={{ from: location }} />;
 }

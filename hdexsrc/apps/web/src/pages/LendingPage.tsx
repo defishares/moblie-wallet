@@ -9,7 +9,7 @@ const formatAmount = (value: number, maximumFractionDigits = 6) => Number.isFini
 const numeric = (value: string) => value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1');
 
 export function LendingPage() {
-  const { session } = useAuth();
+  const { session, ensureSigningKey } = useAuth();
   const { broadcastTransaction, loadAccountAssets, loadLendingOverview, loadLendingPreview, signOperation } = useChain();
   const [overview, setOverview] = useState<LendingOverview | null>(null);
   const [assets, setAssets] = useState<AccountAssetBalance[]>([]);
@@ -71,9 +71,8 @@ export function LendingPage() {
   }
   async function submit() {
     if (!session || !selected) return;
-    if (session.verifiedRole !== 'active') { setError('当前密码只匹配 owner 权限，借贷需要 active 权限密码'); return; }
     setSubmitting(true); setError(null); setNotice(null);
-    try { const nextPreview = await createPreview(); setPreview(nextPreview); const signed = await signOperation('call_order_update', { ...nextPreview.operation, fee: { amount: nextPreview.fee.atomic, asset_id: nextPreview.fee.assetId } }, session.privateKeyWif); await broadcastTransaction(signed); setNotice(`仓位已调整为 ${collateralValue} DFS / ${debtValue} ${selected.symbol}`); reset(); await refresh(); }
+    try { const nextPreview = await createPreview(); setPreview(nextPreview); const signer = await ensureSigningKey(); if (signer.verifiedRole !== 'active') throw new Error('当前密钥只匹配 owner 权限，借贷需要 active 权限密钥'); const signed = await signOperation('call_order_update', { ...nextPreview.operation, fee: { amount: nextPreview.fee.atomic, asset_id: nextPreview.fee.assetId } }, signer.privateKeyWif); await broadcastTransaction(signed); setNotice(`仓位已调整为 ${collateralValue} DFS / ${debtValue} ${selected.symbol}`); reset(); await refresh(); }
     catch (cause) { setError(formatGrapheneError(cause)); } finally { setSubmitting(false); }
   }
   async function closePosition(position: LendingOverview['positions'][number]) {
@@ -83,7 +82,7 @@ export function LendingPage() {
     if (borrowBalance + 10 ** (-debtAsset.precision) < position.debt) { setError(`${debtAsset.symbol} 可用余额不足，无法平仓`); return; }
     if (!window.confirm(`确认关闭 ${debtAsset.symbol} 借仓？\n将偿还全部 ${formatAmount(position.debt)} ${debtAsset.symbol}，并解锁 ${formatAmount(position.collateral)} DFS。`)) return;
     setClosingId(position.id); setError(null); setNotice(null);
-    try { const nextPreview = await loadLendingPreview({ accountNameOrId: session.account.id, debtAssetSymbolOrId: debtAsset.symbol, targetCollateral: '0', targetDebt: '0' }); setPreview(nextPreview); if (session.verifiedRole !== 'active') throw new Error('当前密码只匹配 owner 权限，借贷需要 active 权限密码'); const signed = await signOperation('call_order_update', { ...nextPreview.operation, fee: { amount: nextPreview.fee.atomic, asset_id: nextPreview.fee.assetId } }, session.privateKeyWif); await broadcastTransaction(signed); setNotice(`已平仓：全部偿还 ${position.debt} ${debtAsset.symbol}，DFS 抵押物已解锁`); await refresh(); }
+    try { const nextPreview = await loadLendingPreview({ accountNameOrId: session.account.id, debtAssetSymbolOrId: debtAsset.symbol, targetCollateral: '0', targetDebt: '0' }); setPreview(nextPreview); const signer = await ensureSigningKey(); if (signer.verifiedRole !== 'active') throw new Error('当前密钥只匹配 owner 权限，平仓需要 active 权限密钥'); const signed = await signOperation('call_order_update', { ...nextPreview.operation, fee: { amount: nextPreview.fee.atomic, asset_id: nextPreview.fee.assetId } }, signer.privateKeyWif); await broadcastTransaction(signed); setNotice(`已平仓：全部偿还 ${position.debt} ${debtAsset.symbol}，DFS 抵押物已解锁`); await refresh(); }
     catch (cause) { setError(formatGrapheneError(cause)); } finally { setClosingId(null); }
   }
 

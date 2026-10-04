@@ -30,8 +30,8 @@ function AssetIcon({ symbol }: { symbol: string }) {
 type TransferPreview = Awaited<ReturnType<ReturnType<typeof useChain>['loadTransferPreview']>>;
 
 export function TransferPage() {
-  const { session } = useAuth();
-  const { client, status, loadAccountAssets, loadTransferPreview, signTransferPreview, authenticateAccount, broadcastTransaction, loadAccountHistory } = useChain();
+  const { session, ensureSigningKey } = useAuth();
+  const { client, status, loadAccountAssets, loadTransferPreview, signTransferPreview, broadcastTransaction, loadAccountHistory } = useChain();
   const [balances, setBalances] = useState<AccountAssetBalance[]>([]);
   const [recipient, setRecipient] = useState('');
   const [recipientInfo, setRecipientInfo] = useState<FullAccountData['account'] | null>(null);
@@ -43,7 +43,6 @@ export function TransferPage() {
   const [showAssetPicker, setShowAssetPicker] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [password, setPassword] = useState('');
   const [preview, setPreview] = useState<TransferPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -107,17 +106,17 @@ export function TransferPage() {
   }
 
   async function submitTransfer() {
-    if (!session || !preview || !password) return;
+    if (!session || !preview) return;
     setBusy(true); setToast(null);
     try {
-      const verified = await authenticateAccount(session.account.name, password);
-      if (verified.verifiedRole !== 'active') throw new Error('当前密码只匹配 owner 权限，转账需要 active 权限密码');
-      const signed = await signTransferPreview(preview, verified.privateKeyWif);
+      const signer = await ensureSigningKey();
+      if (signer.verifiedRole !== 'active') throw new Error('当前密钥只匹配 owner 权限，转账需要 active 权限密钥');
+      const signed = await signTransferPreview(preview, signer.privateKeyWif);
       await broadcastTransaction(signed);
       let activityId: string | undefined;
       try { activityId = (await loadAccountHistory(session.account.id, 5)).find(entry => entry.operationType === 0)?.id; } catch { /* broadcast succeeded */ }
       setBroadcastResult(activityId || '已提交节点');
-      setShowPasswordModal(false); setShowConfirmModal(false); setPassword(''); setPreview(null); setAmount(''); setMemo('');
+      setShowPasswordModal(false); setShowConfirmModal(false); setPreview(null); setAmount(''); setMemo('');
       notify(`已成功转账 ${preview.amount.value} ${preview.amount.symbol}`);
     } catch (cause) { notify(formatGrapheneError(cause)); }
     finally { setBusy(false); }
@@ -139,7 +138,7 @@ export function TransferPage() {
     {toast && <button type="button" className="rn-transfer-toast" onClick={() => setToast(null)}>{toast}</button>}
     {showAssetPicker && <div className="rn-transfer-overlay" onClick={() => setShowAssetPicker(false)}><section className="rn-transfer-sheet asset-sheet" role="dialog" aria-label="选择代币" onClick={event => event.stopPropagation()}><span className="rn-transfer-handle" /><h2>选择代币</h2><div className="rn-transfer-asset-list">{assetOptions.map(item => <button type="button" key={item.assetId} onClick={() => { setAssetId(item.assetId); setAmount(''); setShowAssetPicker(false); }}><AssetIcon symbol={item.symbol} /><span><strong>{item.symbol}</strong><small>可用: {formatBalance(item.amount)}</small></span>{selectedAsset?.assetId === item.assetId && <b>✓</b>}</button>)}</div></section></div>}
     {showConfirmModal && preview && <div className="rn-transfer-overlay" onClick={() => setShowConfirmModal(false)}><section className="rn-transfer-sheet confirm-sheet" role="dialog" aria-label="转账预览" onClick={event => event.stopPropagation()}><span className="rn-transfer-handle" /><h2>转账预览</h2><div className="rn-confirm-row"><span>发送者</span><strong>{session?.account.name}</strong></div><div className="rn-confirm-row"><span>接收账户</span><strong>{recipient}</strong></div><div className="rn-confirm-row"><span>转账代币</span><strong>{preview.amount.symbol}</strong></div><div className="rn-confirm-row"><span>转账金额</span><strong>{preview.amount.value} {preview.amount.symbol}</strong></div><div className="rn-confirm-row"><span>可用余额</span><strong>{formatBalance(availableBalance)} {selectedAsset?.symbol}</strong></div><div className="rn-confirm-row"><span>{CORE_ASSET}余额</span><strong>{formatBalance(coreBalance)} {CORE_ASSET}</strong></div>{memo && <div className="rn-confirm-row"><span>备注</span><strong>{memo}</strong></div>}<div className="rn-confirm-actions"><button type="button" onClick={() => setShowConfirmModal(false)}>取消</button><button type="button" onClick={() => { setShowConfirmModal(false); setShowPasswordModal(true); }}>确认提交</button></div></section></div>}
-    {showPasswordModal && <div className="rn-transfer-overlay" onClick={() => { setShowPasswordModal(false); setPassword(''); }}><section className="rn-transfer-sheet password-sheet" role="dialog" aria-label="验证 active 权限" onClick={event => event.stopPropagation()}><span className="rn-transfer-handle" /><h2>验证 active 权限</h2><p>请输入账户密码完成本地签名，密码不会保存。</p><input type="password" value={password} onChange={event => setPassword(event.target.value)} placeholder="输入账户密码" autoFocus /><button type="button" className="rn-transfer-submit" onClick={() => void submitTransfer()} disabled={busy || !password}>{busy ? '签名并广播中…' : '确认签名并广播'}</button></section></div>}
+    {showPasswordModal && <div className="rn-transfer-overlay" onClick={() => setShowPasswordModal(false)}><section className="rn-transfer-sheet password-sheet" role="dialog" aria-label="验证设备并签名" onClick={event => event.stopPropagation()}><span className="rn-transfer-handle" /><h2>验证设备并签名</h2><p>仅在提交链上转账时验证 Passkey，私钥不会离开当前页面内存。</p><button type="button" className="rn-transfer-submit" onClick={() => void submitTransfer()} disabled={busy}>{busy ? '验证并广播中…' : '验证设备并广播'}</button></section></div>}
     {broadcastResult && <div className="rn-transfer-result">交易已提交：{broadcastResult} · <Link to="/orders">查看账户历史</Link></div>}
   </div>;
 }

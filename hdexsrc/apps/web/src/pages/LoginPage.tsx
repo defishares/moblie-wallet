@@ -9,7 +9,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { error: nodeError } = useChain();
-  const { login, biometricLogin, setupBiometricVault, hasBiometricVault, biometricSupported, biometricRestorePending, autoRestored, isAuthenticated } = useAuth();
+  const { login, biometricLogin, setupBiometricVault, hasBiometricVault, biometricSupported, isAuthenticated, sessionHydrated } = useAuth();
   const registeredName = (location.state as { registered?: string } | null)?.registered || '';
   const [loginType, setLoginType] = useState<LoginType>('account');
   const [accountName, setAccountName] = useState(registeredName);
@@ -25,8 +25,8 @@ export function LoginPage() {
   const continueAfterLogin = () => navigate(destination, { replace: true });
 
   useEffect(() => {
-    if (autoRestored && isAuthenticated) continueAfterLogin();
-  }, [autoRestored, isAuthenticated]);
+    if (sessionHydrated && isAuthenticated && !pendingSession) continueAfterLogin();
+  }, [isAuthenticated, pendingSession, sessionHydrated]);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,7 +102,6 @@ export function LoginPage() {
   const errorMessage = error || (!error && nodeError ? `节点连接异常：${nodeError}` : '');
   return (
     <main className="auth-page rn-login-page">
-      {biometricRestorePending && <div className="rn-login-restore-status" role="status"><span className="rn-login-restore-spinner" />正在验证本机设备…</div>}
       <h1 className="rn-login-title">钱包登录</h1>
       <nav className="rn-login-tabs" aria-label="登录方式">
         <button type="button" className={loginType === 'account' ? 'active' : ''} onClick={() => setLoginType('account')}>账户名登录</button>

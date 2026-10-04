@@ -70,7 +70,7 @@ function OrderRow({ order, pair, onCancel }: { order: AccountOrder; pair: Market
 export function TradePage() {
   const params = useParams<{ base?: string; quote?: string }>();
   const pair = useMemo<MarketPair>(() => ({ base: params.base?.toUpperCase() || defaultPair.base, quote: params.quote?.toUpperCase() || defaultPair.quote }), [params.base, params.quote]);
-  const { session } = useAuth();
+  const { session, ensureSigningKey } = useAuth();
   const { tickers, loadLimitOrderPreview, loadOrderBook, loadAccountAssets, loadAccountOrders, loadCancelOrderPreview, signOperation, broadcastTransaction } = useChain();
   const ticker = tickers.find(item => item.base === pair.base && item.quote === pair.quote);
   const [book, setBook] = useState<OrderBookData | null>(null);
@@ -138,12 +138,13 @@ export function TradePage() {
   }
   async function submitOrder() {
     if (!session) { setError('请先登录账户'); return; }
-    if (session.verifiedRole !== 'active') { setError('当前密码只匹配 owner 权限，交易需要 active 权限密码'); return; }
     setLoading(true); setError(null); setNotice(null); setPreview(null);
     try {
       const nextPreview = await createPreview();
       setPreview(nextPreview);
-      const signed = await signOperation('limit_order_create', { ...nextPreview.operation, fee: { amount: nextPreview.fee.atomic, asset_id: nextPreview.fee.assetId } }, session.privateKeyWif);
+      const signer = await ensureSigningKey();
+      if (signer.verifiedRole !== 'active') throw new Error('当前密钥只匹配 owner 权限，交易需要 active 权限密钥');
+      const signed = await signOperation('limit_order_create', { ...nextPreview.operation, fee: { amount: nextPreview.fee.atomic, asset_id: nextPreview.fee.assetId } }, signer.privateKeyWif);
       await broadcastTransaction(signed);
       setNotice(`${side === 'buy' ? '买入' : '卖出'} ${amount} ${pair.base} 成功`);
       setAmount(''); setTotal(''); setSlider(0); await refreshAccount();
@@ -154,14 +155,16 @@ export function TradePage() {
     setLoading(true); setError(null);
     try {
       const cancel = await loadCancelOrderPreview(session.account.id, order.id);
-      const signed = await signOperation('limit_order_cancel', { ...cancel.operation, fee: { amount: cancel.fee.atomic, asset_id: cancel.fee.assetId } }, session.privateKeyWif);
+      const signer = await ensureSigningKey();
+      if (signer.verifiedRole !== 'active') throw new Error('当前密钥只匹配 owner 权限，撤单需要 active 权限密钥');
+      const signed = await signOperation('limit_order_cancel', { ...cancel.operation, fee: { amount: cancel.fee.atomic, asset_id: cancel.fee.assetId } }, signer.privateKeyWif);
       await broadcastTransaction(signed); setNotice('撤单成功'); await refreshAccount();
     } catch (cause) { setError(formatGrapheneError(cause)); } finally { setLoading(false); }
   }
   async function cancelAll() {
     if (!visibleOrders.length || !session) { setNotice('暂无可撤销的委托'); return; }
     setLoading(true); setError(null);
-    try { for (const order of visibleOrders) { const cancel = await loadCancelOrderPreview(session.account.id, order.id); const signed = await signOperation('limit_order_cancel', { ...cancel.operation, fee: { amount: cancel.fee.atomic, asset_id: cancel.fee.assetId } }, session.privateKeyWif); await broadcastTransaction(signed); } setNotice(`成功撤销 ${visibleOrders.length} 笔委托`); await refreshAccount(); }
+    try { const signer = await ensureSigningKey(); if (signer.verifiedRole !== 'active') throw new Error('当前密钥只匹配 owner 权限，撤单需要 active 权限密钥'); for (const order of visibleOrders) { const cancel = await loadCancelOrderPreview(session.account.id, order.id); const signed = await signOperation('limit_order_cancel', { ...cancel.operation, fee: { amount: cancel.fee.atomic, asset_id: cancel.fee.assetId } }, signer.privateKeyWif); await broadcastTransaction(signed); } setNotice(`成功撤销 ${visibleOrders.length} 笔委托`); await refreshAccount(); }
     catch (cause) { setError(formatGrapheneError(cause)); } finally { setLoading(false); }
   }
 

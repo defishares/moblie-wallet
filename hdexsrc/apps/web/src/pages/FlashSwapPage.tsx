@@ -18,8 +18,8 @@ function quantity(value: number, precision: number) { return Number.isFinite(val
 function filterAmount(value: string, precision: number) { const normalized = value.replace(/[^\d.]/g, ''); const [whole, fraction = ''] = normalized.split('.'); return normalized.includes('.') ? `${whole || '0'}.${fraction.slice(0, precision)}` : whole; }
 
 export function FlashSwapPage() {
-  const { session } = useAuth();
-  const { status, storage, client, loadAccountAssets, authenticateAccount, broadcastTransaction, loadLiquidityPools, loadLiquidityPoolHistory, loadLiquidityPreview, signOperation } = useChain();
+  const { session, ensureSigningKey } = useAuth();
+  const { status, storage, client, loadAccountAssets, broadcastTransaction, loadLiquidityPools, loadLiquidityPoolHistory, loadLiquidityPreview, signOperation } = useChain();
   const [pools, setPools] = useState<LiquidityPool[]>([]);
   const [pool, setPool] = useState<LiquidityPool | null>(null);
   const [balances, setBalances] = useState<AccountAssetBalance[]>([]);
@@ -35,7 +35,6 @@ export function FlashSwapPage() {
   const [amountB, setAmountB] = useState('');
   const [minReceive, setMinReceive] = useState('');
   const [preview, setPreview] = useState<LiquidityPreview | null>(null);
-  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loadingPools, setLoadingPools] = useState(false);
@@ -107,15 +106,15 @@ export function FlashSwapPage() {
   }
 
   async function submit() {
-    if (!session || !preview || !password) return;
+    if (!session || !preview) return;
     setBusy(true); setError('');
     try {
-      const verified = await authenticateAccount(session.account.name, password);
-      if (verified.verifiedRole !== 'active') throw new Error('当前密码只匹配 owner 权限，流动性操作需要 active 权限密码');
+      const verified = await ensureSigningKey();
+      if (verified.verifiedRole !== 'active') throw new Error('当前密钥只匹配 owner 权限，流动性操作需要 active 权限密钥');
       const operationName = preview.operationType === 'exchange' ? 'liquidity_pool_exchange' : preview.operationType === 'deposit' ? 'liquidity_pool_deposit' : 'liquidity_pool_withdraw';
       const signed = await signOperation(operationName, { ...preview.operation, fee: { amount: preview.fee.atomic, asset_id: preview.fee.assetId } }, verified.privateKeyWif);
       await broadcastTransaction(signed);
-      setShowPassword(false); setPassword(''); setPreview(null); setAmount(''); setAmountB(''); setNotice('操作已提交节点');
+      setShowPassword(false); setPreview(null); setAmount(''); setAmountB(''); setNotice('操作已提交节点');
     } catch (cause) { setError(formatGrapheneError(cause)); } finally { setBusy(false); }
   }
 
@@ -151,6 +150,6 @@ export function FlashSwapPage() {
         {error && <p className="rn-flash-error">{error}</p>}{notice && <p className="rn-flash-success">{notice}</p>}<button className="rn-flash-submit" type="submit" disabled={busy || status !== 'connected'}>{busy ? '读取链上预览…' : detailTab === 'swap' ? `兑换 ${sellAsset?.symbol} 为 ${receiveAsset?.symbol}` : liquidityAction === 'add' ? '确认增加' : '确认提取'}</button>
       </form>}
     </> : null}
-    {showPassword && <div className="rn-flash-overlay" role="presentation" onMouseDown={event => event.currentTarget === event.target && (setShowPassword(false), setPassword(''))}><section className="rn-flash-password" role="dialog" aria-modal="true"><span/><h2>验证 active 权限</h2><p>请输入账户密码完成本地签名，密码不会保存。</p><input autoFocus type="password" value={password} onChange={event => setPassword(event.target.value)} placeholder="输入账户密码"/><div><button type="button" onClick={() => { setShowPassword(false); setPassword(''); }}>取消</button><button type="button" onClick={() => void submit()} disabled={busy || !password}>{busy ? '签名并广播中…' : '确认签名并广播'}</button></div></section></div>}
+    {showPassword && <div className="rn-flash-overlay" role="presentation" onMouseDown={event => event.currentTarget === event.target && setShowPassword(false)}><section className="rn-flash-password" role="dialog" aria-modal="true"><span/><h2>验证设备并签名</h2><p>仅在提交链上操作时验证 Passkey，私钥不会离开当前页面内存。</p><div><button type="button" onClick={() => setShowPassword(false)}>取消</button><button type="button" onClick={() => void submit()} disabled={busy}>{busy ? '验证并广播中…' : '验证设备并签名'}</button></div></section></div>}
   </main>;
 }

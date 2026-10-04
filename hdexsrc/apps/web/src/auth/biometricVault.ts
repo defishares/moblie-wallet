@@ -4,6 +4,7 @@ import type { WebWalletSession } from './accountPassword';
 const VAULT_VERSION = 1;
 const VAULT_NAMESPACE = 'secure-vault';
 const VAULT_INDEX_KEY = 'vault.index.v1';
+const SESSION_KEY = 'auth.session.v1';
 const KEY_PREFIX = 'vault.account.';
 const HKDF_INFO = new TextEncoder().encode('defishares web passkey vault v1');
 
@@ -20,6 +21,11 @@ interface VaultRecord {
   ciphertext: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PersistedSessionIdentity {
+  account: { id: string; name: string };
+  verifiedRole: WebWalletSession['verifiedRole'];
 }
 
 interface PrfRegistrationResult {
@@ -43,6 +49,21 @@ interface WebAuthnCredentialLike {
 }
 
 const storage = new IndexedDbStorage(VAULT_NAMESPACE);
+
+export async function saveSessionIdentity(session: WebWalletSession): Promise<void> {
+  await storage.set<PersistedSessionIdentity>(SESSION_KEY, {
+    account: session.account,
+    verifiedRole: session.verifiedRole,
+  });
+}
+
+export async function loadSessionIdentity(): Promise<PersistedSessionIdentity | null> {
+  return storage.get<PersistedSessionIdentity>(SESSION_KEY);
+}
+
+export async function clearSessionIdentity(): Promise<void> {
+  await storage.remove(SESSION_KEY);
+}
 
 function assertEnvironment(): void {
   if (typeof window === 'undefined' || !window.isSecureContext) {

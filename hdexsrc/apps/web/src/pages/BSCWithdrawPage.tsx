@@ -29,15 +29,14 @@ function AssetIcon({ symbol }: { symbol: string }) {
 }
 
 export function BSCWithdrawPage() {
-  const { session } = useAuth();
-  const { status, loadAccountAssets, authenticateAccount, broadcastTransaction, loadTransferPreview, signTransferPreview } = useChain();
+  const { session, ensureSigningKey } = useAuth();
+  const { status, loadAccountAssets, broadcastTransaction, loadTransferPreview, signTransferPreview } = useChain();
   const [config, setConfig] = useState<BSCBridgeConfig | null>(null);
   const [balances, setBalances] = useState<AccountAssetBalance[]>([]);
   const [configLoading, setConfigLoading] = useState(true);
   const [configError, setConfigError] = useState(false);
   const [address, setAddress] = useState('');
   const [amount, setAmount] = useState('');
-  const [password, setPassword] = useState('');
   const [preview, setPreview] = useState<TransferPreview | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -99,14 +98,14 @@ export function BSCWithdrawPage() {
   };
 
   const submitWithdrawal = async () => {
-    if (!session || !preview || !password) return;
+    if (!session || !preview) return;
     setBusy(true); setError('');
     try {
-      const verified = await authenticateAccount(session.account.name, password);
-      if (verified.verifiedRole !== 'active') throw new Error('提现需要 active 权限密码');
-      const signed = await signTransferPreview(preview, verified.privateKeyWif);
+      const signer = await ensureSigningKey();
+      if (signer.verifiedRole !== 'active') throw new Error('提现需要 active 权限密钥');
+      const signed = await signTransferPreview(preview, signer.privateKeyWif);
       await broadcastTransaction(signed);
-      setShowPassword(false); setPassword(''); setPreview(null); setAmount(''); setSubmitted(true);
+      setShowPassword(false); setPreview(null); setAmount(''); setSubmitted(true);
       setNotice(`已提交 ${preview.amount.value} ${preview.amount.symbol}，请在充提查询中查看状态`);
     } catch (cause) { setError(formatGrapheneError(cause)); }
     finally { setBusy(false); }
@@ -140,6 +139,6 @@ export function BSCWithdrawPage() {
       <button className="rn-withdraw-submit" type="submit" disabled={busy || configLoading || !session}>{busy ? '校验并提交中…' : '提交提现申请'}</button>
     </form>
 
-    {showPassword && <div className="rn-withdraw-overlay" role="presentation" onMouseDown={event => event.currentTarget === event.target && (setShowPassword(false), setPassword(''))}><section className="rn-withdraw-password" role="dialog" aria-modal="true" aria-label="验证 active 权限"><span className="rn-withdraw-handle"/><h2>验证 active 权限</h2><p>请输入账户密码完成本地签名，密码不会保存。</p><input autoFocus type="password" value={password} onChange={event => setPassword(event.target.value)} placeholder="输入账户密码"/><div><button type="button" onClick={() => { setShowPassword(false); setPassword(''); }}>取消</button><button type="button" onClick={() => void submitWithdrawal()} disabled={busy || !password}>{busy ? '签名并广播中…' : '确认签名并广播'}</button></div></section></div>}
+    {showPassword && <div className="rn-withdraw-overlay" role="presentation" onMouseDown={event => event.currentTarget === event.target && setShowPassword(false)}><section className="rn-withdraw-password" role="dialog" aria-modal="true" aria-label="验证设备并签名"><span className="rn-withdraw-handle"/><h2>验证设备并签名</h2><p>仅在提交提现时验证 Passkey，私钥不会离开当前页面内存。</p><div><button type="button" onClick={() => setShowPassword(false)}>取消</button><button type="button" onClick={() => void submitWithdrawal()} disabled={busy}>{busy ? '验证并广播中…' : '验证设备并广播'}</button></div></section></div>}
   </main>;
 }
