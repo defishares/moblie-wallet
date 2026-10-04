@@ -5,6 +5,7 @@ import {
   hasBiometricVault as hasStoredBiometricVault,
   isBiometricVaultSupported,
   clearSessionIdentity,
+  loadLastAccountName,
   loadSessionIdentity,
   registerBiometricVault,
   removeBiometricVault,
@@ -24,6 +25,7 @@ interface AuthContextValue {
   removeBiometricVault: (accountId: string) => Promise<void>;
   biometricSupported: boolean;
   sessionHydrated: boolean;
+  lastAccountName: string;
   logout: () => void;
   switchAccount: (accountId: string) => void;
 }
@@ -36,11 +38,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [accounts, setAccounts] = useState<WebWalletSession[]>([]);
   const biometricSupported = isBiometricVaultSupported();
   const [sessionHydrated, setSessionHydrated] = useState(false);
+  const [lastAccountName, setLastAccountName] = useState('');
 
   useEffect(() => {
     let cancelled = false;
-    void loadSessionIdentity().then(identity => {
-      if (cancelled || !identity) return;
+    void Promise.all([loadSessionIdentity(), loadLastAccountName()]).then(([identity, rememberedName]) => {
+      if (cancelled) return;
+      if (rememberedName) setLastAccountName(rememberedName);
+      if (!identity) return;
       const restoredSession: WebWalletSession = { ...identity, privateKeyWif: '' };
       setAccounts([restoredSession]);
       setSession(restoredSession);
@@ -52,6 +57,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(async (accountName: string, password: string) => {
     const nextSession = await authenticateAccount(accountName, password);
     await saveSessionIdentity(nextSession);
+    setLastAccountName(nextSession.account.name);
     const identitySession: WebWalletSession = { ...nextSession, privateKeyWif: '' };
     setAccounts(current => [...current.filter(item => item.account.id !== nextSession.account.id), identitySession]);
     setSession(identitySession);
@@ -61,6 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const biometricLogin = useCallback(async (accountName: string) => {
     const nextSession = await unlockBiometricVault(accountName);
     await saveSessionIdentity(nextSession);
+    setLastAccountName(nextSession.account.name);
     setAccounts(current => [...current.filter(item => item.account.id !== nextSession.account.id), nextSession]);
     setSession(nextSession);
     return nextSession;
@@ -111,9 +118,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     removeBiometricVault: deleteBiometricVault,
     biometricSupported,
     sessionHydrated,
+    lastAccountName,
     logout,
     switchAccount,
-  }), [accounts, biometricLogin, biometricSupported, deleteBiometricVault, ensureSigningKey, hasBiometricVault, login, logout, session, sessionHydrated, setupBiometricVault, switchAccount]);
+  }), [accounts, biometricLogin, biometricSupported, deleteBiometricVault, ensureSigningKey, hasBiometricVault, lastAccountName, login, logout, session, sessionHydrated, setupBiometricVault, switchAccount]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

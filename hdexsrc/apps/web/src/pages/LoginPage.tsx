@@ -9,7 +9,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const { error: nodeError } = useChain();
-  const { login, biometricLogin, setupBiometricVault, hasBiometricVault, biometricSupported, isAuthenticated, sessionHydrated } = useAuth();
+  const { login, biometricLogin, setupBiometricVault, hasBiometricVault, biometricSupported, isAuthenticated, sessionHydrated, lastAccountName } = useAuth();
   const registeredName = (location.state as { registered?: string } | null)?.registered || '';
   const [loginType, setLoginType] = useState<LoginType>('account');
   const [accountName, setAccountName] = useState(registeredName);
@@ -27,6 +27,10 @@ export function LoginPage() {
   useEffect(() => {
     if (sessionHydrated && isAuthenticated && !pendingSession) continueAfterLogin();
   }, [isAuthenticated, pendingSession, sessionHydrated]);
+
+  useEffect(() => {
+    if (sessionHydrated && !accountName && lastAccountName) setAccountName(lastAccountName);
+  }, [accountName, lastAccountName, sessionHydrated]);
 
   useEffect(() => {
     let cancelled = false;

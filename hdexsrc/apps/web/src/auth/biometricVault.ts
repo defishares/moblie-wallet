@@ -5,6 +5,7 @@ const VAULT_VERSION = 1;
 const VAULT_NAMESPACE = 'secure-vault';
 const VAULT_INDEX_KEY = 'vault.index.v1';
 const SESSION_KEY = 'auth.session.v1';
+const LAST_ACCOUNT_KEY = 'auth.last-account.v1';
 const KEY_PREFIX = 'vault.account.';
 const HKDF_INFO = new TextEncoder().encode('defishares web passkey vault v1');
 
@@ -55,6 +56,7 @@ export async function saveSessionIdentity(session: WebWalletSession): Promise<vo
     account: session.account,
     verifiedRole: session.verifiedRole,
   });
+  await storage.set(LAST_ACCOUNT_KEY, session.account.name);
 }
 
 export async function loadSessionIdentity(): Promise<PersistedSessionIdentity | null> {
@@ -63,6 +65,10 @@ export async function loadSessionIdentity(): Promise<PersistedSessionIdentity | 
 
 export async function clearSessionIdentity(): Promise<void> {
   await storage.remove(SESSION_KEY);
+}
+
+export async function loadLastAccountName(): Promise<string | null> {
+  return storage.get<string>(LAST_ACCOUNT_KEY);
 }
 
 function assertEnvironment(): void {
