@@ -22,6 +22,8 @@ interface AuthContextValue {
   setupBiometricVault: (walletSession?: WebWalletSession) => Promise<void>;
   hasBiometricVault: (accountName: string) => Promise<boolean>;
   ensureSigningKey: () => Promise<WebWalletSession>;
+  signingKeyTimeoutMinutes: number;
+  setSigningKeyTimeoutMinutes: (minutes: number) => Promise<void>;
   removeBiometricVault: (accountId: string) => Promise<void>;
   biometricSupported: boolean;
   sessionHydrated: boolean;
@@ -32,13 +34,44 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+const SIGNING_KEY_TIMEOUT_STORAGE_KEY = 'auth.signing-key-timeout-minutes.v1';
+const DEFAULT_SIGNING_KEY_TIMEOUT_MINUTES = 15;
+const MIN_SIGNING_KEY_TIMEOUT_MINUTES = 5;
+const MAX_SIGNING_KEY_TIMEOUT_MINUTES = 600;
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const { authenticateAccount } = useChain();
+  const { authenticateAccount, storage } = useChain();
   const [session, setSession] = useState<WebWalletSession | null>(null);
   const [accounts, setAccounts] = useState<WebWalletSession[]>([]);
   const biometricSupported = isBiometricVaultSupported();
   const [sessionHydrated, setSessionHydrated] = useState(false);
   const [lastAccountName, setLastAccountName] = useState('');
+  const [signingKeyTimeoutMinutes, setSigningKeyTimeoutMinutesState] = useState(DEFAULT_SIGNING_KEY_TIMEOUT_MINUTES);
+  const [signingKeyUnlockedAt, setSigningKeyUnlockedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    void storage.get<number>(SIGNING_KEY_TIMEOUT_STORAGE_KEY).then(value => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return;
+      setSigningKeyTimeoutMinutesState(Math.max(MIN_SIGNING_KEY_TIMEOUT_MINUTES, Math.min(MAX_SIGNING_KEY_TIMEOUT_MINUTES, Math.round(value))));
+    }).catch(() => undefined);
+  }, [storage]);
+
+  useEffect(() => {
+    if (!session?.privateKeyWif || signingKeyUnlockedAt == null) return;
+    const remaining = signingKeyUnlockedAt + signingKeyTimeoutMinutes * 60_000 - Date.now();
+    if (remaining <= 0) {
+      setSession(current => current ? { ...current, privateKeyWif: '' } : current);
+      setAccounts(current => current.map(item => item.account.id === session.account.id ? { ...item, privateKeyWif: '' } : item));
+      setSigningKeyUnlockedAt(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setSession(current => current?.account.id === session.account.id ? { ...current, privateKeyWif: '' } : current);
+      setAccounts(current => current.map(item => item.account.id === session.account.id ? { ...item, privateKeyWif: '' } : item));
+      setSigningKeyUnlockedAt(null);
+    }, remaining);
+    return () => window.clearTimeout(timer);
+  }, [session, signingKeyTimeoutMinutes, signingKeyUnlockedAt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,6 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const identitySession: WebWalletSession = { ...nextSession, privateKeyWif: '' };
     setAccounts(current => [...current.filter(item => item.account.id !== nextSession.account.id), identitySession]);
     setSession(identitySession);
+    setSigningKeyUnlockedAt(null);
     return nextSession;
   }, [authenticateAccount]);
 
@@ -70,6 +104,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLastAccountName(nextSession.account.name);
     setAccounts(current => [...current.filter(item => item.account.id !== nextSession.account.id), nextSession]);
     setSession(nextSession);
+    setSigningKeyUnlockedAt(Date.now());
     return nextSession;
   }, []);
 
@@ -81,13 +116,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const ensureSigningKey = useCallback(async () => {
     if (!session) throw new Error('请先登录账户');
-    if (session.privateKeyWif) return session;
+    const now = Date.now();
+    const validUntil = signingKeyUnlockedAt == null ? 0 : signingKeyUnlockedAt + signingKeyTimeoutMinutes * 60_000;
+    if (session.privateKeyWif && signingKeyUnlockedAt != null && now < validUntil) return session;
     const unlocked = await unlockBiometricVault(session.account.name);
     await saveSessionIdentity(unlocked);
     setAccounts(current => [...current.filter(item => item.account.id !== unlocked.account.id), unlocked]);
     setSession(unlocked);
+    setSigningKeyUnlockedAt(now);
     return unlocked;
-  }, [session]);
+  }, [session, signingKeyTimeoutMinutes, signingKeyUnlockedAt]);
+
+  const setSigningKeyTimeoutMinutes = useCallback(async (minutes: number) => {
+    const normalized = Math.max(MIN_SIGNING_KEY_TIMEOUT_MINUTES, Math.min(MAX_SIGNING_KEY_TIMEOUT_MINUTES, Math.round(minutes)));
+    setSigningKeyTimeoutMinutesState(normalized);
+    await storage.set(SIGNING_KEY_TIMEOUT_STORAGE_KEY, normalized);
+  }, [storage]);
 
   const hasBiometricVault = useCallback((accountName: string) => hasStoredBiometricVault(accountName), []);
   const deleteBiometricVault = useCallback((accountId: string) => removeBiometricVault(accountId), []);
@@ -97,12 +141,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // out drops the signing material; nothing is persisted in IndexedDB.
     setAccounts([]);
     setSession(null);
+    setSigningKeyUnlockedAt(null);
     void clearSessionIdentity();
   }, []);
   const switchAccount = useCallback((accountId: string) => {
     const next = accounts.find(item => item.account.id === accountId);
     if (!next) return;
     setSession(next);
+    setSigningKeyUnlockedAt(null);
     void saveSessionIdentity(next);
   }, [accounts]);
 
@@ -115,13 +161,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setupBiometricVault,
     hasBiometricVault,
     ensureSigningKey,
+    signingKeyTimeoutMinutes,
+    setSigningKeyTimeoutMinutes,
     removeBiometricVault: deleteBiometricVault,
     biometricSupported,
     sessionHydrated,
     lastAccountName,
     logout,
     switchAccount,
-  }), [accounts, biometricLogin, biometricSupported, deleteBiometricVault, ensureSigningKey, hasBiometricVault, lastAccountName, login, logout, session, sessionHydrated, setupBiometricVault, switchAccount]);
+  }), [accounts, biometricLogin, biometricSupported, deleteBiometricVault, ensureSigningKey, hasBiometricVault, lastAccountName, login, logout, session, sessionHydrated, setSigningKeyTimeoutMinutes, signingKeyTimeoutMinutes, setupBiometricVault, switchAccount]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

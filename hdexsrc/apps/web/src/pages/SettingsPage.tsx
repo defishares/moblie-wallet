@@ -5,7 +5,7 @@ import { webSocketNodes } from '../services/runtime';
 import { useAuth } from '../state/AuthProvider';
 import { useChain } from '../state/ChainProvider';
 
-type IconName = 'logout' | 'account' | 'server' | 'fingerprint' | 'trash' | 'info' | 'about' | 'copy' | 'plus' | 'close';
+type IconName = 'logout' | 'account' | 'server' | 'fingerprint' | 'clock' | 'trash' | 'info' | 'about' | 'copy' | 'plus' | 'close';
 
 function SettingIcon({ name }: { name: IconName }) {
   const paths: Record<IconName, ReactNode> = {
@@ -13,6 +13,7 @@ function SettingIcon({ name }: { name: IconName }) {
     account: <><circle cx="9" cy="8" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M17 9v6M14 12h6"/></>,
     server: <><rect x="4" y="4" width="16" height="6" rx="2"/><rect x="4" y="14" width="16" height="6" rx="2"/><path d="M8 7h.01M8 17h.01M12 7h5M12 17h5"/></>,
     fingerprint: <><path d="M6.8 9.7a5.4 5.4 0 0 1 10.4 2c0 3.3-.7 6-2.1 8.1"/><path d="M4.3 13.2a7.8 7.8 0 0 1 15.4-2.1M9.2 20c1.2-2.2 1.4-4.5 1.4-7.1a1.5 1.5 0 0 1 3 0c0 3.4-.4 6.2-1.5 8.1M6.5 17.8c.7-1.6.8-3.2.8-5"/></>,
+    clock: <><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></>,
     trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></>,
     info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></>,
     about: <><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></>,
@@ -49,7 +50,7 @@ function nodeLabel(url: string) {
 export function SettingsPage() {
   const navigate = useNavigate();
   const { connectedUrl, status, error, storage, customNodes, switchNode, addCustomNode, removeCustomNode } = useChain();
-  const { session, logout, biometricSupported, hasBiometricVault, setupBiometricVault, removeBiometricVault } = useAuth();
+  const { session, logout, biometricSupported, hasBiometricVault, setupBiometricVault, removeBiometricVault, signingKeyTimeoutMinutes, setSigningKeyTimeoutMinutes } = useAuth();
   const [nodeSheetOpen, setNodeSheetOpen] = useState(false);
   const [addNodeOpen, setAddNodeOpen] = useState(false);
   const [nodeUrl, setNodeUrl] = useState('');
@@ -59,6 +60,8 @@ export function SettingsPage() {
   const [confirmAction, setConfirmAction] = useState<'logout' | 'delete' | 'cache' | 'vault' | null>(null);
   const [deviceVaultReady, setDeviceVaultReady] = useState(false);
   const [deviceBusy, setDeviceBusy] = useState(false);
+  const [timeoutSheetOpen, setTimeoutSheetOpen] = useState(false);
+  const [timeoutDraft, setTimeoutDraft] = useState(String(signingKeyTimeoutMinutes));
 
   const officialNodes = useMemo(() => [...new Set(webSocketNodes)], []);
   const currentNodeName = connectedUrl ? nodeLabel(connectedUrl) : '未连接';
@@ -163,6 +166,22 @@ export function SettingsPage() {
     }
   };
 
+  const openTimeoutSheet = () => {
+    setTimeoutDraft(String(signingKeyTimeoutMinutes));
+    setTimeoutSheetOpen(true);
+  };
+
+  const saveTimeout = async () => {
+    const value = Number(timeoutDraft);
+    if (!Number.isFinite(value)) {
+      setActionError('请输入 5 到 600 之间的分钟数');
+      return;
+    }
+    await setSigningKeyTimeoutMinutes(value);
+    setTimeoutSheetOpen(false);
+    showNotice(`签名验证有效期已设置为 ${Math.max(5, Math.min(600, Math.round(value)))} 分钟`);
+  };
+
   const finishConfirm = async () => {
     const action = confirmAction;
     setConfirmAction(null);
@@ -228,6 +247,13 @@ export function SettingsPage() {
               onClick={deviceVaultReady ? () => setConfirmAction('vault') : () => void setupDeviceUnlock()}
               disabled={!biometricSupported || deviceBusy}
             />
+            <SettingRow
+              icon="clock"
+              title="签名验证有效期"
+              subtitle="Passkey 验证成功后，在此时间内复用本次解锁"
+              right={<span className="rn-settings-version">{signingKeyTimeoutMinutes} 分钟</span>}
+              onClick={openTimeoutSheet}
+            />
           </div>
         </section>}
 
@@ -283,6 +309,17 @@ export function SettingsPage() {
           <label>节点 URL<input value={nodeUrl} onChange={event => { setNodeUrl(event.target.value); setActionError(''); }} placeholder="ws:// 或 wss://" inputMode="url" autoCapitalize="none" /></label>
           {actionError && <p className="rn-add-node-error">{actionError}</p>}
           <div className="rn-add-node-actions"><button type="button" onClick={() => setAddNodeOpen(false)}>取消</button><button type="button" disabled={Boolean(busyNode)} onClick={() => void saveNode()}>{busyNode ? '测试中…' : '测试并添加'}</button></div>
+        </section>
+      </div>}
+
+      {timeoutSheetOpen && <div className="rn-settings-backdrop centered" role="presentation" onMouseDown={event => event.currentTarget === event.target && setTimeoutSheetOpen(false)}>
+        <section className="rn-settings-duration-modal" role="dialog" aria-modal="true" aria-labelledby="signing-timeout-title">
+          <header><h2 id="signing-timeout-title">签名验证有效期</h2><button type="button" onClick={() => setTimeoutSheetOpen(false)} aria-label="关闭"><SettingIcon name="close" /></button></header>
+          <p>Passkey 验证成功后，超过此时间再次发起交易时需要重新验证。可设置 5–600 分钟。</p>
+          <div className="rn-settings-duration-value"><input type="number" min="5" max="600" step="1" value={timeoutDraft} onChange={event => setTimeoutDraft(event.target.value)} aria-label="有效期分钟数" /><span>分钟</span></div>
+          <input className="rn-settings-duration-range" type="range" min="5" max="600" step="1" value={Math.max(5, Math.min(600, Number(timeoutDraft) || 5))} onChange={event => setTimeoutDraft(event.target.value)} aria-label="调整有效期" />
+          <div className="rn-settings-duration-scale"><span>5 分钟</span><span>600 分钟</span></div>
+          <div className="rn-settings-duration-actions"><button type="button" onClick={() => setTimeoutSheetOpen(false)}>取消</button><button type="button" onClick={() => void saveTimeout()}>保存</button></div>
         </section>
       </div>}
 

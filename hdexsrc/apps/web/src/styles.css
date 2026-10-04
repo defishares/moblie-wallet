@@ -976,6 +976,20 @@ body { background: #0d0d0d; color: #fff; }
 .rn-add-node-actions, .rn-settings-confirm > div { display: flex; gap: 12px; margin-top: 20px; }
 .rn-add-node-actions button, .rn-settings-confirm > div button { flex: 1; min-height: 44px; border: 0; border-radius: 9px; color: #fff; background: #333; font-size: 14px; }
 .rn-add-node-actions button:last-child, .rn-settings-confirm > div button.danger { color: #0d0d0d; background: #00d094; }
+.rn-settings-duration-modal { width: min(100%, 380px); padding: 20px; border-radius: 16px; background: #1a1a1a; box-shadow: 0 18px 60px rgba(0,0,0,.45); }
+.rn-settings-duration-modal header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.rn-settings-duration-modal header h2 { margin: 0; color: #fff; font-size: 18px; }
+.rn-settings-duration-modal header button { display: grid; width: 32px; height: 32px; place-items: center; border: 0; border-radius: 50%; color: #888; background: #252525; }
+.rn-settings-duration-modal header button svg { width: 18px; height: 18px; }
+.rn-settings-duration-modal > p { margin: 0; color: #999; font-size: 13px; line-height: 1.6; }
+.rn-settings-duration-value { display: flex; align-items: center; gap: 8px; margin-top: 20px; color: #aaa; font-size: 14px; }
+.rn-settings-duration-value input { width: 110px; min-height: 44px; padding: 0 12px; border: 1px solid #333; border-radius: 9px; outline: 0; color: #fff; background: #0d0d0d; font-size: 18px; text-align: center; }
+.rn-settings-duration-value input:focus { border-color: #00d094; }
+.rn-settings-duration-range { width: 100%; margin-top: 22px; accent-color: #00d094; }
+.rn-settings-duration-scale { display: flex; justify-content: space-between; margin-top: 5px; color: #666; font-size: 11px; }
+.rn-settings-duration-actions { display: flex; gap: 12px; margin-top: 20px; }
+.rn-settings-duration-actions button { flex: 1; min-height: 44px; border: 0; border-radius: 9px; color: #fff; background: #333; font-size: 14px; }
+.rn-settings-duration-actions button:last-child { color: #0d0d0d; background: #00d094; }
 .rn-settings-confirm h2 { margin: 0 0 10px; font-size: 18px; }
 .rn-settings-confirm p { margin: 0; color: #999; font-size: 13px; line-height: 1.6; }
 .rn-settings-confirm > div button.danger { color: #fff; background: #d44c58; }
