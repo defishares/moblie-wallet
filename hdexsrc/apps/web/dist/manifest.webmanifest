@@ -1,0 +1,17 @@
+{
+  "name": "DefiShares",
+  "short_name": "DefiShares",
+  "description": "DefiShares 去中心化数字资产交易平台",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d0d0d",
+  "theme_color": "#0d0d0d",
+  "icons": [
+    {
+      "src": "/icons/defishares-icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
