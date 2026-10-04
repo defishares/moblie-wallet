@@ -93,7 +93,7 @@ export function TransactionHistoryPage() {
   const { session } = useAuth();
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();
-  const { client, loadAccountHistory } = useChain();
+  const { status, client, loadAccountHistory } = useChain();
   const [records, setRecords] = useState<AccountHistoryEntry[]>([]);
   const [assets, setAssets] = useState<Map<string, HistoryAsset>>(new Map());
   const [accounts, setAccounts] = useState<Map<string, string>>(new Map());
@@ -104,7 +104,7 @@ export function TransactionHistoryPage() {
   const [reload, setReload] = useState(0);
 
   const refresh = useCallback(async () => {
-    if (!session) return;
+    if (!session || status !== 'connected') return;
     setLoading(true); setError('');
     try {
       const rows = await loadAccountHistory(session.account.id, 100);
@@ -117,7 +117,7 @@ export function TransactionHistoryPage() {
       setAssets(new Map(loaded.filter((asset): asset is NonNullable<typeof asset> => Boolean(asset)).map(asset => [asset.id, { id: asset.id, symbol: asset.symbol, precision: asset.precision }])));
       setAccounts(new Map(accountRows.map(([id, data]) => [id, data.account.name])));
     } catch (cause) { setError(cause instanceof Error ? cause.message : '交易历史加载失败'); } finally { setLoading(false); }
-  }, [client, loadAccountHistory, session]);
+  }, [client, loadAccountHistory, session, status]);
   useEffect(() => { void refresh(); }, [refresh, reload]);
 
   const visible = useMemo(() => filter === 'all' ? records : records.filter(item => category(item.operationType) === filter), [filter, records]);

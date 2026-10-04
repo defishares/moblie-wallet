@@ -49,7 +49,7 @@ export function FlashSwapPage() {
   useEffect(() => { void storage.get<string[]>('liquidity_pool_favorites.v1').then(value => { if (value) setFavorites(value); }); }, [storage]);
   const refresh = useCallback(async () => { setLoadingPools(true); setError(''); try { const rows = await loadLiquidityPools(); setPools(rows); setPool(current => current && rows.some(row => row.id === current.id) ? rows.find(row => row.id === current.id) || current : current); } catch (cause) { setError(formatGrapheneError(cause)); } finally { setLoadingPools(false); } }, [loadLiquidityPools]);
   useEffect(() => { void refresh(); }, [refresh]);
-  useEffect(() => { if (!session) return; void loadAccountAssets(session.account.id).then(result => setBalances(result.balances)).catch(() => setBalances([])); }, [loadAccountAssets, session]);
+  useEffect(() => { if (!session || status !== 'connected') return; void loadAccountAssets(session.account.id).then(result => setBalances(result.balances)).catch(() => setBalances([])); }, [loadAccountAssets, session, status]);
   useEffect(() => {
     if (page !== 'detail' || detailTab !== 'history' || !pool) return;
     let active = true;

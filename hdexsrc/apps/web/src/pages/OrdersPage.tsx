@@ -18,7 +18,7 @@ const operationLabels: Record<number, string> = {
 
 export function OrdersPage() {
   const { session, ensureSigningKey } = useAuth();
-  const { broadcastTransaction, loadAccountOrders, loadAccountHistory, loadCancelOrderPreview, signOperation } = useChain();
+  const { status, broadcastTransaction, loadAccountOrders, loadAccountHistory, loadCancelOrderPreview, signOperation } = useChain();
   const [orders, setOrders] = useState<Awaited<ReturnType<typeof loadAccountOrders>> | null>(null);
   const [history, setHistory] = useState<Awaited<ReturnType<typeof loadAccountHistory>>>([]);
   const [loading, setLoading] = useState(false);
@@ -27,7 +27,7 @@ export function OrdersPage() {
   const [cancelLoading, setCancelLoading] = useState(false);
 
   const refresh = useCallback(async () => {
-    if (!session) return;
+    if (!session || status !== 'connected') return;
     setLoading(true);
     setError(null);
     try {
@@ -42,7 +42,7 @@ export function OrdersPage() {
     } finally {
       setLoading(false);
     }
-  }, [loadAccountHistory, loadAccountOrders, session]);
+  }, [loadAccountHistory, loadAccountOrders, session, status]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 

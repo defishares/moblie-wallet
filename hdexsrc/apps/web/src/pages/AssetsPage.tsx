@@ -53,7 +53,7 @@ interface AssetDetail extends AccountAssetBalance {
 }
 
 export function AssetsPage() {
-  const { loadAccountAssets, loadAccountOrders, loadLendingOverview, storage, tickers } = useChain();
+  const { status, loadAccountAssets, loadAccountOrders, loadLendingOverview, storage, tickers } = useChain();
   const { session } = useAuth();
   const [result, setResult] = useState<Awaited<ReturnType<typeof loadAccountAssets>> | null>(null);
   const [orders, setOrders] = useState<AccountOrder[]>([]);
@@ -66,7 +66,7 @@ export function AssetsPage() {
   const touchStart = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!session) return;
+    if (!session || status !== 'connected') return;
     setLoading(true); setError(null);
     try {
       const [assetsResult, ordersResult, lendingResult] = await Promise.allSettled([loadAccountAssets(session.account.id), loadAccountOrders(session.account.id), loadLendingOverview(session.account.id)]);
@@ -77,7 +77,7 @@ export function AssetsPage() {
     }
     catch (cause) { setResult(null); setError(cause instanceof Error ? cause.message : '账户资产查询失败'); }
     finally { setLoading(false); }
-  }, [loadAccountAssets, loadAccountOrders, loadLendingOverview, session]);
+  }, [loadAccountAssets, loadAccountOrders, loadLendingOverview, session, status]);
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => { void storage.get<string>('asset_valuation.v1').then(saved => { if (saved && ['CNY', 'USD', 'USDT', 'GOLD'].includes(saved)) setValuationAsset(saved); }); }, [storage]);
 

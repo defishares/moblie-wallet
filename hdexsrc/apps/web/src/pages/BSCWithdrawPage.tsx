@@ -62,13 +62,13 @@ export function BSCWithdrawPage() {
   const expectedReceived = amountValid && fee ? Math.max(0, enteredAmount - fee.amount) : null;
 
   const loadData = useCallback(async () => {
-    if (!session) return;
+    if (!session || status !== 'connected') return;
     setConfigLoading(true); setConfigError(false); setError('');
     const [configResult, balanceResult] = await Promise.allSettled([gatewayApi.getBSCConfig(), loadAccountAssets(session.account.id)]);
     if (configResult.status === 'fulfilled') setConfig(configResult.value); else { setConfig(null); setConfigError(true); setError(formatGrapheneError(configResult.reason)); }
     if (balanceResult.status === 'fulfilled') setBalances(balanceResult.value.balances); else setBalances([]);
     setConfigLoading(false);
-  }, [loadAccountAssets, session]);
+  }, [loadAccountAssets, session, status]);
 
   useEffect(() => { void loadData(); }, [loadData]);
 

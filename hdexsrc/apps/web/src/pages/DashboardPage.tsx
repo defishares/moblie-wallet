@@ -63,7 +63,7 @@ export function DashboardPage() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [buyMessage, setBuyMessage] = useState(false);
   const refreshAccount = useCallback(async () => {
-    if (!session) return;
+    if (!session || status !== 'connected') return;
     try {
       setAccountError(null);
       setAccountAssets(await loadAccountAssets(session.account.id));
@@ -71,7 +71,7 @@ export function DashboardPage() {
       setAccountAssets(null);
       setAccountError(cause instanceof Error ? cause.message : '账户资产查询失败');
     }
-  }, [loadAccountAssets, session]);
+  }, [loadAccountAssets, session, status]);
 
   useEffect(() => { void refreshAccount(); }, [refreshAccount]);
 

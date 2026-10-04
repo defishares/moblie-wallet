@@ -54,9 +54,9 @@ export function TransferPage() {
   }, []);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session || status !== 'connected') return;
     void loadAccountAssets(session.account.id).then(result => setBalances(result.balances)).catch(() => setBalances([]));
-  }, [loadAccountAssets, session]);
+  }, [loadAccountAssets, session, status]);
 
   const assetOptions = useMemo(() => balances.length ? balances : [{ assetId: '1.3.0', symbol: CORE_ASSET, precision: 5, amount: 0 }], [balances]);
   const selectedAsset = assetOptions.find(item => item.assetId === assetId) || assetOptions[0];

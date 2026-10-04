@@ -10,7 +10,7 @@ const numeric = (value: string) => value.replace(/[^0-9.]/g, '').replace(/(\..*)
 
 export function LendingPage() {
   const { session, ensureSigningKey } = useAuth();
-  const { broadcastTransaction, loadAccountAssets, loadLendingOverview, loadLendingPreview, signOperation } = useChain();
+  const { status, broadcastTransaction, loadAccountAssets, loadLendingOverview, loadLendingPreview, signOperation } = useChain();
   const [overview, setOverview] = useState<LendingOverview | null>(null);
   const [assets, setAssets] = useState<AccountAssetBalance[]>([]);
   const [asset, setAsset] = useState('');
@@ -27,14 +27,14 @@ export function LendingPage() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!session) return;
+    if (!session || status !== 'connected') return;
     setLoading(true); setError(null);
     try {
       const [nextOverview, nextAssets] = await Promise.all([loadLendingOverview(session.account.id), loadAccountAssets(session.account.id)]);
       setOverview(nextOverview); setAssets(nextAssets.balances);
       setAsset(current => current && nextOverview.borrowAssets.some(item => item.symbol === current) ? current : nextOverview.borrowAssets[0]?.symbol ?? '');
     } catch (cause) { setError(formatGrapheneError(cause)); } finally { setLoading(false); }
-  }, [loadAccountAssets, loadLendingOverview, session]);
+  }, [loadAccountAssets, loadLendingOverview, session, status]);
   useEffect(() => { void refresh(); }, [refresh]);
 
   const selected = overview?.borrowAssets.find(item => item.symbol === asset) ?? overview?.borrowAssets[0];

@@ -71,7 +71,7 @@ export function TradePage() {
   const params = useParams<{ base?: string; quote?: string }>();
   const pair = useMemo<MarketPair>(() => ({ base: params.base?.toUpperCase() || defaultPair.base, quote: params.quote?.toUpperCase() || defaultPair.quote }), [params.base, params.quote]);
   const { session, ensureSigningKey } = useAuth();
-  const { tickers, loadLimitOrderPreview, loadOrderBook, loadAccountAssets, loadAccountOrders, loadCancelOrderPreview, signOperation, broadcastTransaction } = useChain();
+  const { status, tickers, loadLimitOrderPreview, loadOrderBook, loadAccountAssets, loadAccountOrders, loadCancelOrderPreview, signOperation, broadcastTransaction } = useChain();
   const ticker = tickers.find(item => item.base === pair.base && item.quote === pair.quote);
   const [book, setBook] = useState<OrderBookData | null>(null);
   const [bookError, setBookError] = useState<string | null>(null);
@@ -92,18 +92,19 @@ export function TradePage() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const refreshAccount = useCallback(async () => {
-    if (!session) return;
+    if (!session || status !== 'connected') return;
     try {
       const [assetResult, orderResult] = await Promise.all([loadAccountAssets(session.account.id), loadAccountOrders(session.account.id)]);
       setAssets(assetResult.balances); setOrders(orderResult.orders);
     } catch (cause) { setError(formatGrapheneError(cause)); }
-  }, [loadAccountAssets, loadAccountOrders, session]);
+  }, [loadAccountAssets, loadAccountOrders, session, status]);
   useEffect(() => {
     let live = true;
     setBook(null); setBookError(null);
+    if (status !== 'connected') return () => { live = false; };
     void loadOrderBook(pair).then(value => live && setBook(value)).catch(cause => live && setBookError(cause instanceof Error ? cause.message : '盘口加载失败'));
     return () => { live = false; };
-  }, [loadOrderBook, pair]);
+  }, [loadOrderBook, pair, status]);
   useEffect(() => { void refreshAccount(); }, [refreshAccount, pair]);
   useEffect(() => { if (!price && ticker?.latest) setPrice(priceText(ticker.latest)); }, [price, ticker?.latest]);
 
