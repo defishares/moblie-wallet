@@ -3,6 +3,14 @@
   "version": "1.0.4",
   "private": true,
   "scripts": {
+    "web": "pnpm --filter @defishares/web dev",
+    "web:build": "pnpm --filter @defishares/web build",
+    "web:typecheck": "pnpm --filter @defishares/web typecheck",
+    "core:test": "pnpm --filter @defishares/core test",
+    "core:typecheck": "pnpm --filter @defishares/core typecheck",
+    "cross:test": "pnpm --filter @defishares/core exec node --test --import tsx ../../tests/shared-core.test.mjs",
+    "testnet:preflight": "pnpm --filter @defishares/core exec tsx ../../scripts/testnet-preflight.ts",
+    "verify:web": "pnpm core:test && pnpm core:typecheck && pnpm web:typecheck && pnpm web:build",
     "sync:assets": "cp src/assets/kline.html android/app/src/main/assets/",
     "android": "npm run sync:assets && react-native run-android --mode defiSharesDebug --appId org.defishares.hdexapp",
     "android:clean": "cd android && ./gradlew clean",
@@ -17,6 +25,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "@defishares/core": "workspace:*",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-native/new-app-screen": "0.83.0",
     "@react-navigation/bottom-tabs": "^7.8.12",

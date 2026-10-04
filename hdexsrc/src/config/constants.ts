@@ -3,6 +3,10 @@
  */
 
 import { NativeModules, Platform } from 'react-native';
+import {
+  MAINNET_CONFIG as SHARED_MAINNET_CONFIG,
+  TESTNET_CONFIG as SHARED_TESTNET_CONFIG,
+} from '@defishares/core';
 
 // 导入 Native Module 类型
 import '../types/native_modules.d';
@@ -105,40 +109,13 @@ export const DEFAULT_MODULE_CONFIG: ModuleConfig = {
 // 主网配置
 // ============================================
 
-export const MAINNET_CONFIG: NetworkConfig = {
-  type: 'mainnet',
-  name: 'DeFiShares',
-  wsNodes: [
-    { name: 'DeFiShares 节点01', url: 'wss://api-01.defishares.org/ws/', group: 'official' },
-    { name: 'DeFiShares 官方节点', url: 'wss://api.defishares.org/ws/', group: 'official' },
-    { name: '社区节点', url: 'wss://8.148.185.200:8008', group: 'community' },
-  ],
-  defaultWsNode: 'wss://api.defishares.org/ws/',
-  coreAsset: 'DFS',
-  coreAssetId: '1.3.0',
-  defaultQuoteAsset: 'USDT',
-  chainId: '7089639ad55d91ef53946f3fc4dc86ea5b8a4917edcfce6d3c39bc259657acb5',
-};
+export const MAINNET_CONFIG: NetworkConfig = SHARED_MAINNET_CONFIG;
 
 // ============================================
 // 测试网配置
 // ============================================
 
-export const TESTNET_CONFIG: NetworkConfig = {
-  type: 'testnet',
-  name: '测试网',
-  wsNodes: [
-    { name: 'DefiShares 节点01', url: 'wss://api-01.defishares.org/ws/', group: 'official' },
-    { name: '官方节点01', url: 'wss://api.defishares.org/ws/', group: 'official' },
-    { name: '社区节点', url: 'wss://8.148.185.200:8008', group: 'community' },
-  ],
-  defaultWsNode: 'wss://api.defishares.org/ws/',
-  coreAsset: 'DFS',
-  coreAssetId: '1.3.0',
-  defaultQuoteAsset: 'CNY',
-  // 测试网链 ID
-  chainId: '7089639ad55d91ef53946f3fc4dc86ea5b8a4917edcfce6d3c39bc259657acb5',
-};
+export const TESTNET_CONFIG: NetworkConfig = SHARED_TESTNET_CONFIG;
 
 // 盘口初始化使用的主网默认交易对；主区列表不使用本地兜底，完全由链上管理员配置。
 // IMarket.list 使用 [quote, base] 顺序。

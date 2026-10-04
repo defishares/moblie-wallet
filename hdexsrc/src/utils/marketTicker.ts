@@ -1,4 +1,5 @@
 import type { TickerData } from '../types';
+import { normalizeGrapheneTicker } from '@defishares/core';
 
 /** Convert a percentage when the displayed price is inverted (1 / price). */
 export const invertPercentChange = (value: string): string => {
@@ -12,19 +13,7 @@ export const invertPercentChange = (value: string): string => {
 
 /** Normalize the node's base/quote price to quote units per traded asset. */
 export const normalizeMarketTicker = (raw: TickerData): TickerData => {
-  const invert = (value: string): string => {
-    const price = Number(value);
-    return Number.isFinite(price) && price > 0 ? String(1 / price) : '0';
-  };
-  return {
-    ...raw,
-    latest: invert(raw.latest),
-    // Inverting a market also swaps bid and ask: 1 / highest bid is the new
-    // lowest ask, and 1 / lowest ask is the new highest bid.
-    lowest_ask: invert(raw.highest_bid),
-    highest_bid: invert(raw.lowest_ask),
-    percent_change: invertPercentChange(raw.percent_change),
-  };
+  return normalizeGrapheneTicker(raw);
 };
 
 /** Only accept pairs explicitly returned by the node; never combine arbitrary assets. */
