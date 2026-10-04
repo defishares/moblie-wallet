@@ -51,14 +51,13 @@ function conversionRate(from: string, to: string, tickers: ReturnType<typeof use
 }
 
 export function DashboardPage() {
-  const { client, status, tickers, favoriteKeys, loadAccountAssets, storage } = useChain();
+  const { client, status, tickers, favoriteKeys, valuationAsset, loadAccountAssets } = useChain();
   const { session } = useAuth();
   const [accountAssets, setAccountAssets] = useState<Awaited<ReturnType<typeof loadAccountAssets>> | null>(null);
   const [accountError, setAccountError] = useState<string | null>(null);
   const [rank, setRank] = useState<'favorites' | 'hot' | 'gainers' | 'losers'>('hot');
   const [hideBalance, setHideBalance] = useState(false);
   const [quoteAsset, setQuoteAsset] = useState<string | null>(null);
-  const [valuationAsset, setValuationAsset] = useState(runtimeConfig.network.defaultQuoteAsset);
   const [announcements, setAnnouncements] = useState<HomeAnnouncement[]>([]);
   const [moreOpen, setMoreOpen] = useState(false);
   const [buyMessage, setBuyMessage] = useState(false);
@@ -74,15 +73,6 @@ export function DashboardPage() {
   }, [loadAccountAssets, session, status]);
 
   useEffect(() => { void refreshAccount(); }, [refreshAccount]);
-
-  // Keep the home valuation in lockstep with AssetsScreen's selected quote.
-  useEffect(() => {
-    let live = true;
-    void storage.get<string>('asset_valuation.v1').then(saved => {
-      if (live && saved && ['CNY', 'USD', 'USDT', 'GOLD'].includes(saved)) setValuationAsset(saved);
-    });
-    return () => { live = false; };
-  }, [storage]);
 
   useEffect(() => {
     if (status !== 'connected') return;

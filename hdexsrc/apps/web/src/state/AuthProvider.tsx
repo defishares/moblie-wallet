@@ -40,7 +40,7 @@ const MIN_SIGNING_KEY_TIMEOUT_MINUTES = 5;
 const MAX_SIGNING_KEY_TIMEOUT_MINUTES = 600;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const { authenticateAccount, storage } = useChain();
+  const { authenticateAccount, prefetchAccountData, status, storage } = useChain();
   const [session, setSession] = useState<WebWalletSession | null>(null);
   const [accounts, setAccounts] = useState<WebWalletSession[]>([]);
   const biometricSupported = isBiometricVaultSupported();
@@ -55,6 +55,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSigningKeyTimeoutMinutesState(Math.max(MIN_SIGNING_KEY_TIMEOUT_MINUTES, Math.min(MAX_SIGNING_KEY_TIMEOUT_MINUTES, Math.round(value))));
     }).catch(() => undefined);
   }, [storage]);
+
+  useEffect(() => {
+    if (!session || status !== 'connected') return;
+    void prefetchAccountData(session.account.id);
+  }, [prefetchAccountData, session, status]);
 
   useEffect(() => {
     if (!session?.privateKeyWif || signingKeyUnlockedAt == null) return;

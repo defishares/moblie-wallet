@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import type { AccountAssetBalance, AccountOrder, LendingOverview } from '@defishares/core';
 import { useAuth } from '../state/AuthProvider';
 import { useChain } from '../state/ChainProvider';
-import { runtimeConfig } from '../services/runtime';
 
 function conversionRate(from: string, to: string, tickers: ReturnType<typeof useChain>['tickers']): number {
   if (from === to) return 1;
@@ -53,7 +52,7 @@ interface AssetDetail extends AccountAssetBalance {
 }
 
 export function AssetsPage() {
-  const { status, loadAccountAssets, loadAccountOrders, loadLendingOverview, storage, tickers } = useChain();
+  const { status, loadAccountAssets, loadAccountOrders, loadLendingOverview, valuationAsset, setValuationAsset, tickers } = useChain();
   const { session } = useAuth();
   const [result, setResult] = useState<Awaited<ReturnType<typeof loadAccountAssets>> | null>(null);
   const [orders, setOrders] = useState<AccountOrder[]>([]);
@@ -61,7 +60,6 @@ export function AssetsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false);
-  const [valuationAsset, setValuationAsset] = useState(runtimeConfig.network.defaultQuoteAsset);
   const [valuationOpen, setValuationOpen] = useState(false);
   const touchStart = useRef<number | null>(null);
 
@@ -79,7 +77,6 @@ export function AssetsPage() {
     finally { setLoading(false); }
   }, [loadAccountAssets, loadAccountOrders, loadLendingOverview, session, status]);
   useEffect(() => { void refresh(); }, [refresh]);
-  useEffect(() => { void storage.get<string>('asset_valuation.v1').then(saved => { if (saved && ['CNY', 'USD', 'USDT', 'GOLD'].includes(saved)) setValuationAsset(saved); }); }, [storage]);
 
   const valuationOptions = ['CNY', 'USD', 'USDT', 'GOLD'];
   const balances = useMemo<AssetDetail[]>(() => {
@@ -101,7 +98,7 @@ export function AssetsPage() {
     });
   }, [lending, orders, result, tickers, valuationAsset]);
   const totalValue = useMemo(() => balances.reduce((sum, item) => sum + Math.max(0, item.total * conversionRate(item.symbol, valuationAsset, tickers)), 0), [balances, tickers, valuationAsset]);
-  const setValuation = (value: string) => { setValuationAsset(value); setValuationOpen(false); void storage.set('asset_valuation.v1', value); };
+  const setValuation = (value: string) => { void setValuationAsset(value); setValuationOpen(false); };
   const onTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => { if (touchStart.current !== null && event.changedTouches[0].clientY - touchStart.current > 70 && window.scrollY <= 0) void refresh(); touchStart.current = null; };
 
   return <div className="rn-page rn-assets-page" onTouchStart={event => { touchStart.current = event.touches[0].clientY; }} onTouchEnd={onTouchEnd}>
