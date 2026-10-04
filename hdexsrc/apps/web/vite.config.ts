@@ -43,7 +43,14 @@ export default defineConfig(({ mode }) => {
     rollupOptions: {
       plugins: [{
         name: 'defishares-release-manifest',
-        generateBundle() {
+        generateBundle(_options, bundle) {
+          // Cloudflare's dashboard direct-upload flow can omit special
+          // `_redirects` filenames. Keep a generated 404 shell as a second
+          // SPA fallback so direct refreshes still boot React at deep paths.
+          const index = bundle['index.html'];
+          if (index?.type === 'asset' && typeof index.source === 'string') {
+            this.emitFile({ type: 'asset', fileName: '404.html', source: index.source });
+          }
           this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ version: process.env.VITE_RELEASE_VERSION || process.env.GIT_COMMIT_SHA || 'local', builtAt: new Date().toISOString() }, null, 2) });
         },
       }],
