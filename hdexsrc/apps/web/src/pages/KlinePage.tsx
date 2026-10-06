@@ -44,8 +44,11 @@ function bollingerAt(values: number[], size: number): { middle: number; upper: n
 function KlineCanvas({ data, mainIndicators, showVolume, showMacd, baseSymbol, quoteSymbol }: { data: KLineData[]; mainIndicators: MainIndicator[]; showVolume: boolean; showMacd: boolean; baseSymbol: string; quoteSymbol: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [view, setView] = useState({ start: Math.max(0, data.length - 100), end: data.length, crosshair: -1 });
-  const dragRef = useRef<{ x: number; start: number; moved: boolean } | null>(null);
+  const dragRef = useRef<{ x: number; start: number; moved: boolean; selecting: boolean; timer: number | null } | null>(null);
+  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchRef = useRef<{ distance: number; start: number; end: number; centerIndex: number } | null>(null);
   useEffect(() => { setView({ start: Math.max(0, data.length - 100), end: data.length, crosshair: -1 }); }, [data]);
+  useEffect(() => () => { if (dragRef.current?.timer !== null) window.clearTimeout(dragRef.current?.timer); }, []);
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !data.length) return;
@@ -54,6 +57,9 @@ function KlineCanvas({ data, mainIndicators, showVolume, showMacd, baseSymbol, q
     const width = Math.max(320, rect.width); const height = Math.max(300, rect.height);
     canvas.width = Math.floor(width * dpr); canvas.height = Math.floor(height * dpr);
     const ctx = canvas.getContext('2d'); if (!ctx) return;
+    const setDash = (pattern: number[]) => {
+      if (typeof ctx.setLineDash === 'function') ctx.setLineDash(pattern);
+    };
     ctx.scale(dpr, dpr); ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#0b0e11'; ctx.fillRect(0, 0, width, height);
     const start = Math.max(0, Math.min(view.start, data.length - 1)); const end = Math.max(start + 1, Math.min(view.end, data.length));
@@ -102,33 +108,107 @@ function KlineCanvas({ data, mainIndicators, showVolume, showMacd, baseSymbol, q
         ['量', `${compact(selected.close ? selected.volume / selected.close : 0)} ${baseSymbol}`],
         ['额', `${compact(selected.volume)} ${quoteSymbol}`],
       ];
-      const tooltipWidth = Math.min(218, width - 12);
-      const lineHeight = 20;
-      const tooltipHeight = details.length * lineHeight + 16;
-      let tooltipX = xx + 12;
-      if (tooltipX + tooltipWidth > width - 6) tooltipX = xx - tooltipWidth - 12;
-      tooltipX = Math.max(6, tooltipX);
+      ctx.font = '10px system-ui';
+      const labelWidth = Math.max(...details.map(([label]) => ctx.measureText(label).width));
+      const valueWidth = Math.max(...details.map(([, value]) => ctx.measureText(value).width));
+      const tooltipWidth = Math.min(156, Math.max(128, labelWidth + valueWidth + 20), width - 12);
+      const lineHeight = 15;
+      const tooltipHeight = details.length * lineHeight + 12;
+      const chartLeft = left + 6;
+      const chartRight = width - right - 6;
+      const tooltipX = xx <= (chartLeft + chartRight) / 2 ? chartRight - tooltipWidth : chartLeft;
       const tooltipY = Math.max(8, Math.min(height - tooltipHeight - 8, y(selected.high) - tooltipHeight / 2));
-      ctx.fillStyle = 'rgba(31, 40, 53, .96)'; ctx.strokeStyle = '#3a4658'; ctx.lineWidth = 1;
-      ctx.fillRect(tooltipX, tooltipY, tooltipWidth, tooltipHeight); ctx.strokeRect(tooltipX, tooltipY, tooltipWidth, tooltipHeight);
-      ctx.font = '12px system-ui';
+      const radius = 5;
+      const roundedRect = () => {
+        ctx.beginPath();
+        ctx.moveTo(tooltipX + radius, tooltipY);
+        ctx.lineTo(tooltipX + tooltipWidth - radius, tooltipY);
+        ctx.quadraticCurveTo(tooltipX + tooltipWidth, tooltipY, tooltipX + tooltipWidth, tooltipY + radius);
+        ctx.lineTo(tooltipX + tooltipWidth, tooltipY + tooltipHeight - radius);
+        ctx.quadraticCurveTo(tooltipX + tooltipWidth, tooltipY + tooltipHeight, tooltipX + tooltipWidth - radius, tooltipY + tooltipHeight);
+        ctx.lineTo(tooltipX + radius, tooltipY + tooltipHeight);
+        ctx.quadraticCurveTo(tooltipX, tooltipY + tooltipHeight, tooltipX, tooltipY + tooltipHeight - radius);
+        ctx.lineTo(tooltipX, tooltipY + radius);
+        ctx.quadraticCurveTo(tooltipX, tooltipY, tooltipX + radius, tooltipY);
+        ctx.closePath();
+      };
+      ctx.fillStyle = 'rgba(31, 40, 53, .9)'; ctx.strokeStyle = '#3a4658'; ctx.lineWidth = 1;
+      roundedRect(); ctx.fill(); roundedRect(); ctx.stroke();
       details.forEach(([label, value, tone], index) => {
-        const yy = tooltipY + 18 + index * lineHeight;
-        ctx.textAlign = 'left'; ctx.fillStyle = '#f1f4f8'; ctx.fillText(label, tooltipX + 10, yy);
-        ctx.textAlign = 'right'; ctx.fillStyle = tone === 'positive' ? '#00d094' : tone === 'negative' ? '#ff5b6b' : '#f1f4f8'; ctx.fillText(value, tooltipX + tooltipWidth - 10, yy);
+        const yy = tooltipY + 14 + index * lineHeight;
+        ctx.textAlign = 'left'; ctx.fillStyle = '#f1f4f8'; ctx.fillText(label, tooltipX + 8, yy);
+        ctx.textAlign = 'right'; ctx.fillStyle = tone === 'positive' ? '#00d094' : tone === 'negative' ? '#ff5b6b' : '#f1f4f8'; ctx.fillText(value, tooltipX + tooltipWidth - 8, yy);
       });
       ctx.textAlign = 'left';
-      ctx.strokeStyle = '#aab4bd'; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(xx, top); ctx.lineTo(xx, height - bottom); ctx.stroke(); ctx.setLineDash([]);
+      ctx.strokeStyle = '#aab4bd'; setDash([4, 4]); ctx.beginPath(); ctx.moveTo(xx, top); ctx.lineTo(xx, height - bottom); ctx.stroke(); setDash([]);
     }
   }, [baseSymbol, data, mainIndicators, quoteSymbol, showMacd, showVolume, view]);
-  const getIndexAtPointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  const getIndexAtClientX = (clientX: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return -1;
+    const rect = canvas.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     return Math.min(view.end - 1, Math.max(view.start, view.start + Math.round(ratio * Math.max(0, view.end - view.start - 1))));
   };
-  const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => { event.currentTarget.setPointerCapture(event.pointerId); dragRef.current = { x: event.clientX, start: view.start, moved: false }; setView(current => ({ ...current, crosshair: getIndexAtPointer(event) })); };
-  const onPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => { const canvas = canvasRef.current; if (!canvas) return; const drag = dragRef.current; const current = getIndexAtPointer(event); if (drag) { if (Math.abs(drag.x - event.clientX) > 6) drag.moved = true; if (drag.moved) { const delta = Math.round((drag.x - event.clientX) / 7); const width = view.end - view.start; const start = Math.max(0, Math.min(data.length - width, drag.start + delta)); setView(currentView => ({ ...currentView, start, end: start + width, crosshair: -1 })); } else setView(currentView => ({ ...currentView, crosshair: current })); } else setView(currentView => ({ ...currentView, crosshair: current })); };
-  const onPointerUp = () => { dragRef.current = null; };
+  const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* iOS WebView may reject capture for a touch pointer */ }
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointersRef.current.size >= 2) {
+      const points = Array.from(pointersRef.current.values()).slice(0, 2);
+      const firstPoint = points[0]; const secondPoint = points[1];
+      const centerX = (firstPoint.x + secondPoint.x) / 2;
+      const distance = Math.max(1, Math.hypot(firstPoint.x - secondPoint.x, firstPoint.y - secondPoint.y));
+      if (dragRef.current?.timer !== null && dragRef.current) window.clearTimeout(dragRef.current.timer);
+      dragRef.current = null;
+      pinchRef.current = { distance, start: view.start, end: view.end, centerIndex: getIndexAtClientX(centerX) };
+      return;
+    }
+    const interaction = { x: event.clientX, start: view.start, moved: false, selecting: false, timer: null as number | null };
+    interaction.timer = window.setTimeout(() => {
+      if (dragRef.current !== interaction || interaction.moved) return;
+      interaction.selecting = true;
+      const current = getIndexAtClientX(interaction.x);
+      if (current >= 0) setView(viewState => ({ ...viewState, crosshair: current }));
+    }, 350);
+    dragRef.current = interaction;
+  };
+  const onPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (pointersRef.current.has(event.pointerId)) pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pinchRef.current && pointersRef.current.size >= 2) {
+      const points = Array.from(pointersRef.current.values()).slice(0, 2);
+      const distance = Math.max(1, Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y));
+      const pinch = pinchRef.current;
+      const initialWidth = pinch.end - pinch.start;
+      const minWidth = Math.min(24, data.length);
+      const nextWidth = Math.max(minWidth, Math.min(data.length, Math.round(initialWidth * pinch.distance / distance)));
+      const anchorRatio = initialWidth > 1 ? (pinch.centerIndex - pinch.start) / (initialWidth - 1) : .5;
+      const rawStart = Math.round(pinch.centerIndex - anchorRatio * (nextWidth - 1));
+      const start = Math.max(0, Math.min(data.length - nextWidth, rawStart));
+      setView(current => ({ ...current, start, end: start + nextWidth, crosshair: -1 }));
+      return;
+    }
+    const interaction = dragRef.current;
+    if (!interaction) return;
+    const current = getIndexAtClientX(event.clientX);
+    if (interaction.selecting) {
+      if (current >= 0) setView(viewState => ({ ...viewState, crosshair: current }));
+      return;
+    }
+    if (Math.abs(interaction.x - event.clientX) <= 6) return;
+    interaction.moved = true;
+    if (interaction.timer !== null) { window.clearTimeout(interaction.timer); interaction.timer = null; }
+    const delta = Math.round((interaction.x - event.clientX) / 7);
+    const width = view.end - view.start;
+    const start = Math.max(0, Math.min(data.length - width, interaction.start + delta));
+    setView(viewState => ({ ...viewState, start, end: start + width, crosshair: -1 }));
+  };
+  const onPointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    pointersRef.current.delete(event.pointerId);
+    pinchRef.current = null;
+    const interaction = dragRef.current;
+    if (interaction && interaction.timer !== null) window.clearTimeout(interaction.timer);
+    dragRef.current = null;
+  };
   const onWheel = (event: React.WheelEvent<HTMLCanvasElement>) => { event.preventDefault(); const width = view.end - view.start; const nextWidth = Math.max(24, Math.min(data.length, width + (event.deltaY > 0 ? 12 : -12))); const center = Math.round((view.start + view.end) / 2); const start = Math.max(0, Math.min(data.length - nextWidth, center - Math.round(nextWidth / 2))); setView(current => ({ ...current, start, end: start + nextWidth })); };
   return data.length ? <canvas ref={canvasRef} className="rn-kline-canvas" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onContextMenu={event => event.preventDefault()} onWheel={onWheel} aria-label="K线图" /> : <div className="rn-kline-empty">当前周期暂无 K 线数据</div>;
 }
@@ -161,7 +241,7 @@ export function KlinePage() {
     void loadRecentTrades(pair, 30).then(rows => { if (live) setTrades(rows); }).catch(cause => { if (live) { setTrades([]); setTradesError(cause instanceof Error ? cause.message : '最新成交加载失败'); } }).finally(() => { if (live) setTradesLoading(false); });
     return () => { live = false; };
   }, [bottomTab, loadRecentTrades, pair, tradesReload]);
-  const latest = data.at(-1); const first = data[0]; const latestPrice = latest?.close ?? ticker?.latest ?? 0; const change = first?.open ? (latestPrice - first.open) / first.open * 100 : ticker?.change24h ?? 0; const high = data.length ? Math.max(...data.map(item => item.high)) : 0; const low = data.length ? Math.min(...data.map(item => item.low)) : 0; const volume = data.reduce((sum, item) => sum + item.volume, 0); const closes = data.map(item => item.close); const ma20 = movingAverage(closes, 20).at(-1) ?? 0; const ma45 = movingAverage(closes, 45).at(-1) ?? 0; const ma60 = movingAverage(closes, 60).at(-1) ?? 0; const ema20 = exponentialAverage(closes, 20).at(-1) ?? 0; const boll = bollingerAt(closes, 20);
+  const latest = data.length ? data[data.length - 1] : undefined; const first = data[0]; const latestPrice = latest?.close ?? ticker?.latest ?? 0; const change = first?.open ? (latestPrice - first.open) / first.open * 100 : ticker?.change24h ?? 0; const high = data.length ? Math.max(...data.map(item => item.high)) : 0; const low = data.length ? Math.min(...data.map(item => item.low)) : 0; const volume = data.reduce((sum, item) => sum + item.volume, 0); const closes = data.map(item => item.close); const ma20Values = movingAverage(closes, 20); const ma45Values = movingAverage(closes, 45); const ma60Values = movingAverage(closes, 60); const ema20Values = exponentialAverage(closes, 20); const ma20 = ma20Values.length ? ma20Values[ma20Values.length - 1] : 0; const ma45 = ma45Values.length ? ma45Values[ma45Values.length - 1] : 0; const ma60 = ma60Values.length ? ma60Values[ma60Values.length - 1] : 0; const ema20 = ema20Values.length ? ema20Values[ema20Values.length - 1] : 0; const boll = bollingerAt(closes, 20);
   return <div className="rn-kline-page">
     <header className="rn-kline-header"><Link to={`/trade/${pair.base}/${pair.quote}`} aria-label="返回">‹</Link><h1>{pair.base}/{pair.quote}</h1><button type="button" className={favorite ? 'favorite active' : 'favorite'} onClick={() => void toggleFavorite(`${pair.base}_${pair.quote}`)} aria-label="收藏">★</button></header>
     <main className="rn-kline-scroll">
