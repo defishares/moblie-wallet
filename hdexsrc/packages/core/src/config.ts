@@ -31,11 +31,11 @@ export const MAINNET_CONFIG: NetworkConfig = {
   type: 'mainnet',
   name: 'DeFiShares',
   wsNodes: [
+    { name: '社区节点', url: 'wss://8.148.185.200:8008', group: 'community' },
     { name: 'DeFiShares 官方节点', url: 'wss://api.defishares.org/ws/', group: 'official' },
     { name: 'DeFiShares 节点01', url: 'wss://api-01.defishares.org/ws/', group: 'official' },
-    { name: '社区节点', url: 'wss://8.148.185.200:8008', group: 'community' },
   ],
-  defaultWsNode: 'wss://api.defishares.org/ws/',
+  defaultWsNode: 'wss://8.148.185.200:8008',
   coreAsset: 'DFS',
   coreAssetId: '1.3.0',
   defaultQuoteAsset: 'USDT',
