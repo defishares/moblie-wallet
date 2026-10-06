@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { atomicToDecimal, decimalToAtomic, marketKey, normalizeGrapheneTicker, normalizeTicker, resolveRuntimeConfig } from '../src/index';
+import { atomicToDecimal, decimalToAtomic, marketKey, minimumReceiveWithSlippage, normalizeGrapheneTicker, normalizeTicker, resolveRuntimeConfig } from '../src/index';
 
 test('runtime channel determines the same network as mobile configuration', () => {
   assert.equal(resolveRuntimeConfig('hdexmain').network.type, 'mainnet');
@@ -36,4 +36,10 @@ test('decimal transfer amounts preserve precision without floating point roundin
   assert.equal(decimalToAtomic('0.01', 2), '1');
   assert.throws(() => decimalToAtomic('1.001', 2), /最多支持/);
   assert.throws(() => decimalToAtomic('0', 2), /大于 0/);
+});
+
+test('minimum receive floors small quotes instead of rounding them up', () => {
+  assert.equal(minimumReceiveWithSlippage(0.1004, 2), '0.09');
+  assert.equal(minimumReceiveWithSlippage(12.3456, 2), '12.28');
+  assert.equal(minimumReceiveWithSlippage(0.0001, 2), '');
 });

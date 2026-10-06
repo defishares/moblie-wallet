@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { RNScreenHeader } from '../components/RNScreenHeader';
-import { webSocketNodes } from '../services/runtime';
+import { webSocketNodeConfigs } from '../services/runtime';
 import { useAuth } from '../state/AuthProvider';
 import { useChain } from '../state/ChainProvider';
 import { validatePin } from '../auth/pinVault';
@@ -69,7 +69,9 @@ export function SettingsPage() {
   const [timeoutSheetOpen, setTimeoutSheetOpen] = useState(false);
   const [timeoutDraft, setTimeoutDraft] = useState(String(signingKeyTimeoutMinutes));
 
-  const officialNodes = useMemo(() => [...new Set(webSocketNodes)], []);
+  const nodeConfigs = useMemo(() => [...new Map(webSocketNodeConfigs.map(node => [node.url, node])).values()], []);
+  const officialNodes = useMemo(() => nodeConfigs.filter(node => node.group !== 'community'), [nodeConfigs]);
+  const communityNodes = useMemo(() => nodeConfigs.filter(node => node.group === 'community'), [nodeConfigs]);
   const currentNodeName = connectedUrl ? nodeLabel(connectedUrl) : '未连接';
   const connectionText = status === 'connected'
     ? `已连接: ${connectedUrl}`
@@ -126,8 +128,8 @@ export function SettingsPage() {
   };
 
   const chooseAutomaticNode = async () => {
-    for (const url of officialNodes) {
-      if (await selectNode(url)) return;
+    for (const node of [...officialNodes, ...communityNodes]) {
+      if (await selectNode(node.url)) return;
     }
   };
 
@@ -340,14 +342,22 @@ export function SettingsPage() {
               <span className="rn-node-radio"><i /></span><span><strong>自动选择节点</strong><small>启动时自动选择最快的可用节点</small></span><b>›</b>
             </button>
             <h3>官方节点</h3>
-            {officialNodes.map(url => <div className={`rn-node-row${connectedUrl === url ? ' selected' : ''}`} key={url}>
-              <button className="rn-node-main" type="button" onClick={() => void selectNode(url)} disabled={Boolean(busyNode)}>
-                <span className="rn-node-radio">{busyNode === url ? <i className="loading" /> : <i />}</span>
-                <span><strong>{nodeLabel(url)}</strong><small>{url}</small></span>
+            {officialNodes.map(node => <div className={`rn-node-row${connectedUrl === node.url ? ' selected' : ''}`} key={node.url}>
+              <button className="rn-node-main" type="button" onClick={() => void selectNode(node.url)} disabled={Boolean(busyNode)}>
+                <span className="rn-node-radio">{busyNode === node.url ? <i className="loading" /> : <i />}</span>
+                <span><strong>{node.name}</strong><small>{node.url}</small></span>
               </button>
-              {connectedUrl === url && <em>已连接</em>}
-              <button className="rn-node-icon" type="button" onClick={() => void copyNode(url)} aria-label="复制节点链接"><SettingIcon name="copy" /></button>
+              {connectedUrl === node.url && <em>已连接</em>}
+              <button className="rn-node-icon" type="button" onClick={() => void copyNode(node.url)} aria-label="复制节点链接"><SettingIcon name="copy" /></button>
             </div>)}
+            {communityNodes.length > 0 && <><h3>社区节点</h3>{communityNodes.map(node => <div className={`rn-node-row${connectedUrl === node.url ? ' selected' : ''}`} key={node.url}>
+              <button className="rn-node-main" type="button" onClick={() => void selectNode(node.url)} disabled={Boolean(busyNode)}>
+                <span className="rn-node-radio">{busyNode === node.url ? <i className="loading" /> : <i />}</span>
+                <span><strong>{node.name}</strong><small>{node.url}</small></span>
+              </button>
+              {connectedUrl === node.url && <em>已连接</em>}
+              <button className="rn-node-icon" type="button" onClick={() => void copyNode(node.url)} aria-label="复制节点链接"><SettingIcon name="copy" /></button>
+            </div>)}</>}
             <h3>自定义节点</h3>
             {customNodes.length === 0 && <p className="rn-node-empty">暂无自定义节点</p>}
             {customNodes.map(url => <div className={`rn-node-row${connectedUrl === url ? ' selected' : ''}`} key={url}>

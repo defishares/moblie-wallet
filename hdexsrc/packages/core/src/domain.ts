@@ -251,6 +251,22 @@ export function decimalToAtomic(value: string, precision: number): string {
   return atomic || '0';
 }
 
+/**
+ * Calculate a safe minimum receive amount for a pool quote.
+ *
+ * The chain stores receive amounts as integers. Using `toFixed()` directly
+ * can round a small quote up (for example 0.099 -> 0.10), making
+ * `min_to_receive` greater than the amount the pool can actually produce.
+ * Floor to the destination asset's atomic unit instead.
+ */
+export function minimumReceiveWithSlippage(value: number, precision: number, slippageBps = 50): string {
+  if (!Number.isFinite(value) || value <= 0 || !Number.isInteger(precision) || precision < 0 || precision > 20) return '';
+  if (!Number.isFinite(slippageBps) || slippageBps < 0 || slippageBps >= 10_000) return '';
+  const scale = 10 ** precision;
+  const atomic = Math.floor(value * scale * (10_000 - slippageBps) / 10_000);
+  return atomic > 0 ? (atomic / scale).toFixed(precision) : '';
+}
+
 export function formatPrice(value: number, maximumFractionDigits = 8): string {
   if (!Number.isFinite(value)) return '--';
   return new Intl.NumberFormat('zh-CN', {

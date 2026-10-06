@@ -38,7 +38,7 @@ export function BSCHistoryPage() {
     [activeTab, records],
   );
 
-  return <main className="rn-history-page">
+  return <main className="rn-history-page rn-bsc-history-page">
     <header className="rn-history-header"><Link to="/assets" aria-label="返回资产">‹</Link><h1>充提查询</h1><button type="button" onClick={() => void loadHistory()} disabled={loading} aria-label="刷新">↻</button></header>
     <nav className="rn-history-tabs" aria-label="充提类型">
       <button type="button" className={activeTab === 'deposit' ? 'active' : ''} onClick={() => setActiveTab('deposit')}>充值</button>

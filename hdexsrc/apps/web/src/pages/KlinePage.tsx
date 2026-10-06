@@ -41,10 +41,10 @@ function bollingerAt(values: number[], size: number): { middle: number; upper: n
   return { middle, upper: middle + deviation * 2, lower: middle - deviation * 2 };
 }
 
-function KlineCanvas({ data, mainIndicators, showVolume, showMacd }: { data: KLineData[]; mainIndicators: MainIndicator[]; showVolume: boolean; showMacd: boolean }) {
+function KlineCanvas({ data, mainIndicators, showVolume, showMacd, baseSymbol, quoteSymbol }: { data: KLineData[]; mainIndicators: MainIndicator[]; showVolume: boolean; showMacd: boolean; baseSymbol: string; quoteSymbol: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [view, setView] = useState({ start: Math.max(0, data.length - 100), end: data.length, crosshair: -1 });
-  const dragRef = useRef<{ x: number; start: number } | null>(null);
+  const dragRef = useRef<{ x: number; start: number; moved: boolean } | null>(null);
   useEffect(() => { setView({ start: Math.max(0, data.length - 100), end: data.length, crosshair: -1 }); }, [data]);
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -76,13 +76,61 @@ function KlineCanvas({ data, mainIndicators, showVolume, showMacd }: { data: KLi
     rows.forEach((item, index) => { const xx = x(index); const up = item.close >= item.open; const color = up ? '#00d094' : '#ff4757'; ctx.strokeStyle = color; ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(xx, y(item.high)); ctx.lineTo(xx, y(item.low)); ctx.stroke(); const topBody = y(Math.max(item.open, item.close)); const bodyHeight = Math.max(1.5, Math.abs(y(item.open) - y(item.close))); ctx.fillRect(xx - candleWidth / 2, topBody, candleWidth, bodyHeight); });
     if (showVolume) { const volumeTop = chartHeight + 12; const volumeHeight = height * .12; const maxVolume = Math.max(...rows.map(item => item.volume), 1); rows.forEach((item, index) => { ctx.fillStyle = item.close >= item.open ? 'rgba(0,208,148,.55)' : 'rgba(255,71,87,.55)'; const barHeight = item.volume / maxVolume * volumeHeight; ctx.fillRect(x(index) - candleWidth / 2, volumeTop + volumeHeight - barHeight, candleWidth, barHeight); }); ctx.fillStyle = '#6f7b86'; ctx.fillText('VOL', left, volumeTop + 10); }
     if (showMacd) { const macdTop = height - 62; const macd = closes.map((value, index) => value - movingAverage(closes, 12)[index]); const maxMacd = Math.max(...macd.map(Math.abs), 1); ctx.fillStyle = '#6f7b86'; ctx.fillText('MACD', left, macdTop + 10); macd.forEach((value, index) => { ctx.fillStyle = value >= 0 ? 'rgba(0,208,148,.6)' : 'rgba(255,71,87,.6)'; const barHeight = Math.abs(value) / maxMacd * 35; ctx.fillRect(x(index) - candleWidth / 2, macdTop + 28 - (value >= 0 ? barHeight : 0), candleWidth, barHeight); }); }
-    if (view.crosshair >= 0 && view.crosshair < rows.length) { const xx = x(view.crosshair); ctx.strokeStyle = '#aab4bd'; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(xx, top); ctx.lineTo(xx, height - bottom); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = '#fff'; ctx.fillText(new Date(rows[view.crosshair].timestamp).toLocaleString(), Math.min(width - 145, Math.max(6, xx - 55)), height - 7); }
-  }, [data, mainIndicators, showMacd, showVolume, view]);
-  const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => { event.currentTarget.setPointerCapture(event.pointerId); dragRef.current = { x: event.clientX, start: view.start }; };
-  const onPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => { const canvas = canvasRef.current; if (!canvas) return; const rect = canvas.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)); const current = Math.min(data.length - 1, Math.max(0, view.start + Math.round(ratio * (view.end - view.start)))); if (dragRef.current) { const delta = Math.round((dragRef.current.x - event.clientX) / 7); const width = view.end - view.start; const start = Math.max(0, Math.min(data.length - width, dragRef.current.start + delta)); setView(currentView => ({ ...currentView, start, end: start + width })); } else setView(currentView => ({ ...currentView, crosshair: current })); };
+    const selected = view.crosshair >= start && view.crosshair < end ? data[view.crosshair] : undefined;
+    if (selected) {
+      const selectedOffset = view.crosshair - start;
+      const xx = x(selectedOffset);
+      const change = selected.close - selected.open;
+      const changePercent = selected.open ? change / selected.open * 100 : 0;
+      const amplitude = selected.open ? (selected.high - selected.low) / selected.open * 100 : 0;
+      const compact = (value: number) => {
+        const absolute = Math.abs(value);
+        if (absolute >= 100_000_000) return `${(value / 100_000_000).toFixed(2)}亿`;
+        if (absolute >= 10_000) return `${(value / 10_000).toFixed(2)}万`;
+        return formatPrice(value, 2);
+      };
+      const time = new Date(selected.timestamp).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).replace('/', '-');
+      const details: Array<[string, string, string?]> = [
+        ['时间', time],
+        ['开', formatPrice(selected.open)],
+        ['高', formatPrice(selected.high)],
+        ['低', formatPrice(selected.low)],
+        ['收', formatPrice(selected.close)],
+        ['涨跌', `${change >= 0 ? '+' : ''}${formatPrice(change)}`, change >= 0 ? 'positive' : 'negative'],
+        ['涨跌幅', `${changePercent >= 0 ? '+' : ''}${changePercent.toFixed(2)}%`, changePercent >= 0 ? 'positive' : 'negative'],
+        ['振幅', `${amplitude.toFixed(2)}%`],
+        ['量', `${compact(selected.close ? selected.volume / selected.close : 0)} ${baseSymbol}`],
+        ['额', `${compact(selected.volume)} ${quoteSymbol}`],
+      ];
+      const tooltipWidth = Math.min(218, width - 12);
+      const lineHeight = 20;
+      const tooltipHeight = details.length * lineHeight + 16;
+      let tooltipX = xx + 12;
+      if (tooltipX + tooltipWidth > width - 6) tooltipX = xx - tooltipWidth - 12;
+      tooltipX = Math.max(6, tooltipX);
+      const tooltipY = Math.max(8, Math.min(height - tooltipHeight - 8, y(selected.high) - tooltipHeight / 2));
+      ctx.fillStyle = 'rgba(31, 40, 53, .96)'; ctx.strokeStyle = '#3a4658'; ctx.lineWidth = 1;
+      ctx.fillRect(tooltipX, tooltipY, tooltipWidth, tooltipHeight); ctx.strokeRect(tooltipX, tooltipY, tooltipWidth, tooltipHeight);
+      ctx.font = '12px system-ui';
+      details.forEach(([label, value, tone], index) => {
+        const yy = tooltipY + 18 + index * lineHeight;
+        ctx.textAlign = 'left'; ctx.fillStyle = '#f1f4f8'; ctx.fillText(label, tooltipX + 10, yy);
+        ctx.textAlign = 'right'; ctx.fillStyle = tone === 'positive' ? '#00d094' : tone === 'negative' ? '#ff5b6b' : '#f1f4f8'; ctx.fillText(value, tooltipX + tooltipWidth - 10, yy);
+      });
+      ctx.textAlign = 'left';
+      ctx.strokeStyle = '#aab4bd'; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.moveTo(xx, top); ctx.lineTo(xx, height - bottom); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }, [baseSymbol, data, mainIndicators, quoteSymbol, showMacd, showVolume, view]);
+  const getIndexAtPointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    return Math.min(view.end - 1, Math.max(view.start, view.start + Math.round(ratio * Math.max(0, view.end - view.start - 1))));
+  };
+  const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => { event.currentTarget.setPointerCapture(event.pointerId); dragRef.current = { x: event.clientX, start: view.start, moved: false }; setView(current => ({ ...current, crosshair: getIndexAtPointer(event) })); };
+  const onPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => { const canvas = canvasRef.current; if (!canvas) return; const drag = dragRef.current; const current = getIndexAtPointer(event); if (drag) { if (Math.abs(drag.x - event.clientX) > 6) drag.moved = true; if (drag.moved) { const delta = Math.round((drag.x - event.clientX) / 7); const width = view.end - view.start; const start = Math.max(0, Math.min(data.length - width, drag.start + delta)); setView(currentView => ({ ...currentView, start, end: start + width, crosshair: -1 })); } else setView(currentView => ({ ...currentView, crosshair: current })); } else setView(currentView => ({ ...currentView, crosshair: current })); };
   const onPointerUp = () => { dragRef.current = null; };
   const onWheel = (event: React.WheelEvent<HTMLCanvasElement>) => { event.preventDefault(); const width = view.end - view.start; const nextWidth = Math.max(24, Math.min(data.length, width + (event.deltaY > 0 ? 12 : -12))); const center = Math.round((view.start + view.end) / 2); const start = Math.max(0, Math.min(data.length - nextWidth, center - Math.round(nextWidth / 2))); setView(current => ({ ...current, start, end: start + nextWidth })); };
-  return data.length ? <canvas ref={canvasRef} className="rn-kline-canvas" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={() => setView(current => ({ ...current, crosshair: -1 }))} onWheel={onWheel} aria-label="K线图" /> : <div className="rn-kline-empty">当前周期暂无 K 线数据</div>;
+  return data.length ? <canvas ref={canvasRef} className="rn-kline-canvas" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onContextMenu={event => event.preventDefault()} onWheel={onWheel} aria-label="K线图" /> : <div className="rn-kline-empty">当前周期暂无 K 线数据</div>;
 }
 
 function OrderBookPanel({ book, pair }: { book: OrderBookData | null; pair: MarketPair }) {
@@ -119,7 +167,7 @@ export function KlinePage() {
     <main className="rn-kline-scroll">
       <nav className="rn-kline-content-tabs">{([['market', '行情'], ['overview', '概况'], ['data', '数据']] as const).map(([key, label]) => <button type="button" key={key} className={contentTab === key ? 'active' : ''} onClick={() => setContentTab(key)}>{label}</button>)}</nav>
       <section className="rn-kline-price-info"><div className="rn-kline-price-main"><span>最新价格⌄</span><strong className={change >= 0 ? 'positive' : 'negative'}>{formatPrice(latestPrice)}</strong><small>${formatPrice(latestPrice)} <b className={change >= 0 ? 'positive' : 'negative'}>24h {change >= 0 ? '+' : ''}{change.toFixed(2)}%</b></small></div><div className="rn-kline-stats"><div><span>24小时最高</span><b>{formatPrice(high)}</b></div><div><span>24小时最低</span><b>{formatPrice(low)}</b></div><div><span>24小时量({pair.base})</span><b>{formatPrice(volume, 2)}</b></div><div><span>24小时额({pair.quote})</span><b>{formatPrice(volume * latestPrice, 2)}</b></div></div></section>
-      <div className="rn-kline-chart-card"><div className="rn-kline-periods">{(showMoreIntervals ? intervals : intervals.filter(item => ['timeline', '15m', '1h', '4h', '1d'].includes(item.key))).map(item => <button type="button" key={item.key} className={interval.key === item.key ? 'active' : ''} onClick={() => setInterval(item)}>{item.label}</button>)}<button type="button" className="more-periods" onClick={() => setShowMoreIntervals(value => !value)}>{showMoreIntervals ? '收起' : '更多'}⌄</button><button type="button" className="chart-tool" onClick={() => setShowIndicatorSettings(true)} aria-label="指标设置">⚙</button><button type="button" className="chart-tool" onClick={() => setInterval(current => ({ ...current }))} aria-label="刷新">↻</button></div><div className="rn-kline-chart-legend">{mainIndicators.includes('ma') && <span className="ma-legend">MA(20): {formatPrice(ma20)}　MA(45): {formatPrice(ma45)}　MA(60): {formatPrice(ma60)}</span>}{mainIndicators.includes('ema') && <span className="ema-legend">EMA(20): {formatPrice(ema20)}</span>}{mainIndicators.includes('boll') && <span className="boll-legend">BOLL(20): {formatPrice(boll.middle)}　UP: {formatPrice(boll.upper)}　DN: {formatPrice(boll.lower)}</span>}</div><div className="rn-kline-indicators"><button type="button" className={mainIndicators.length === 0 ? 'active' : ''} onClick={() => setShowIndicatorSettings(true)}>主图</button>{mainIndicatorOptions.map(item => <button type="button" key={item.key} className={mainIndicators.includes(item.key) ? 'active' : ''} onClick={() => toggleMainIndicator(item.key)}>{item.label}</button>)}<i /><button type="button" className={showVolume ? 'active' : ''} onClick={() => setShowVolume(value => !value)}>VOL</button><button type="button" className={showMacd ? 'active' : ''} onClick={() => setShowMacd(value => !value)}>MACD</button><button type="button" className="indicator-settings" onClick={() => setShowIndicatorSettings(true)} aria-label="自定义指标">☷</button></div>{loading ? <div className="rn-kline-empty">加载 K 线中…</div> : error ? <div className="rn-kline-empty rn-kline-error">{error}</div> : <KlineCanvas data={data} mainIndicators={mainIndicators} showVolume={showVolume} showMacd={showMacd}/>}</div>
+      <div className="rn-kline-chart-card"><div className="rn-kline-periods">{(showMoreIntervals ? intervals : intervals.filter(item => ['timeline', '15m', '1h', '4h', '1d'].includes(item.key))).map(item => <button type="button" key={item.key} className={interval.key === item.key ? 'active' : ''} onClick={() => setInterval(item)}>{item.label}</button>)}<button type="button" className="more-periods" onClick={() => setShowMoreIntervals(value => !value)}>{showMoreIntervals ? '收起' : '更多'}⌄</button><button type="button" className="chart-tool" onClick={() => setShowIndicatorSettings(true)} aria-label="指标设置">⚙</button><button type="button" className="chart-tool" onClick={() => setInterval(current => ({ ...current }))} aria-label="刷新">↻</button></div><div className="rn-kline-chart-legend">{mainIndicators.includes('ma') && <span className="ma-legend">MA(20): {formatPrice(ma20)}　MA(45): {formatPrice(ma45)}　MA(60): {formatPrice(ma60)}</span>}{mainIndicators.includes('ema') && <span className="ema-legend">EMA(20): {formatPrice(ema20)}</span>}{mainIndicators.includes('boll') && <span className="boll-legend">BOLL(20): {formatPrice(boll.middle)}　UP: {formatPrice(boll.upper)}　DN: {formatPrice(boll.lower)}</span>}</div><div className="rn-kline-indicators"><button type="button" className={mainIndicators.length === 0 ? 'active' : ''} onClick={() => setShowIndicatorSettings(true)}>主图</button>{mainIndicatorOptions.map(item => <button type="button" key={item.key} className={mainIndicators.includes(item.key) ? 'active' : ''} onClick={() => toggleMainIndicator(item.key)}>{item.label}</button>)}<i /><button type="button" className={showVolume ? 'active' : ''} onClick={() => setShowVolume(value => !value)}>VOL</button><button type="button" className={showMacd ? 'active' : ''} onClick={() => setShowMacd(value => !value)}>MACD</button><button type="button" className="indicator-settings" onClick={() => setShowIndicatorSettings(true)} aria-label="自定义指标">☷</button></div>{loading ? <div className="rn-kline-empty">加载 K 线中…</div> : error ? <div className="rn-kline-empty rn-kline-error">{error}</div> : <KlineCanvas data={data} mainIndicators={mainIndicators} showVolume={showVolume} showMacd={showMacd} baseSymbol={pair.base} quoteSymbol={pair.quote}/>}</div>
       <section className="rn-kline-bottom"><nav><button type="button" className={bottomTab === 'orderbook' ? 'active' : ''} onClick={() => setBottomTab('orderbook')}>委托订单</button><button type="button" className={bottomTab === 'trades' ? 'active' : ''} onClick={() => setBottomTab('trades')}>最新成交</button></nav>{bottomTab === 'orderbook' ? <OrderBookPanel book={book} pair={pair}/> : tradesLoading ? <div className="rn-kline-empty rn-kline-trades-empty"><span>◷</span><strong>最新成交</strong><small>加载中...</small></div> : tradesError ? <div className="rn-kline-empty rn-kline-trades-empty"><span>!</span><strong>最新成交加载失败</strong><small>{tradesError}</small><button type="button" onClick={() => setTradesReload(value => value + 1)}>重新加载</button></div> : trades.length === 0 ? <div className="rn-kline-empty rn-kline-trades-empty"><span>◷</span><strong>最新成交</strong><small>暂无成交记录</small></div> : <div className="rn-kline-trades"><div className="rn-kline-trade-head"><span>时间</span><span>价格({pair.quote})</span><span>数量({pair.base})</span></div>{trades.map((trade, index) => <div className="rn-kline-trade-row" key={`${trade.timestamp}-${index}`}><span>{new Date(trade.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}</span><b className={trade.isSell ? 'negative' : 'positive'}>{formatPrice(trade.price, 8)}</b><span>{formatPrice(trade.amount, 8)}</span></div>)}</div>}</section>
     </main>
     <footer className="rn-kline-actions"><Link to={`/trade/${pair.base}/${pair.quote}`}>交易</Link><button type="button" onClick={() => window.alert('网格功能敬请期待')}>▦<small>网格</small></button></footer>

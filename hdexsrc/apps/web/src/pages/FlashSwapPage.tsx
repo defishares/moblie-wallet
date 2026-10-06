@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { formatPrice, type AccountAssetBalance, type LiquidityPool, type LiquidityPreview } from '@defishares/core';
+import { formatPrice, minimumReceiveWithSlippage, type AccountAssetBalance, type LiquidityPool, type LiquidityPreview } from '@defishares/core';
 import { useAuth } from '../state/AuthProvider';
 import { useChain } from '../state/ChainProvider';
 import { formatGrapheneError } from '../services/grapheneError';
 import { collectLiquidityHistoryReferences, parseLiquidityHistory, type HistoryAsset, type LiquidityHistoryEntry } from '../services/liquidityPoolHistory';
 import { RNScreenHeader } from '../components/RNScreenHeader';
+import { SuccessCheckIcon } from '../components/AppIcons';
 
 function estimate(pool: LiquidityPool, side: 'a' | 'b', value: number) {
   const input = side === 'a' ? pool.balanceA : pool.balanceB;
@@ -18,7 +19,7 @@ function quantity(value: number, precision: number) { return Number.isFinite(val
 function filterAmount(value: string, precision: number) { const normalized = value.replace(/[^\d.]/g, ''); const [whole, fraction = ''] = normalized.split('.'); return normalized.includes('.') ? `${whole || '0'}.${fraction.slice(0, precision)}` : whole; }
 
 export function FlashSwapPage() {
-  const { session, ensureSigningKey } = useAuth();
+  const { session, ensureSigningKey, signingKeyUnlocked } = useAuth();
   const { status, storage, client, loadAccountAssets, broadcastTransaction, loadLiquidityPools, loadLiquidityPoolHistory, loadLiquidityPreview, signOperation } = useChain();
   const [pools, setPools] = useState<LiquidityPool[]>([]);
   const [pool, setPool] = useState<LiquidityPool | null>(null);
@@ -40,6 +41,11 @@ export function FlashSwapPage() {
   const [loadingPools, setLoadingPools] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(''), 3200);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   const [history, setHistory] = useState<LiquidityHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
@@ -77,7 +83,10 @@ export function FlashSwapPage() {
   const receiveAsset = pool ? side === 'a' ? pool.assetB : pool.assetA : null;
   const selectedBalance = balances.find(item => item.assetId === sellAsset?.id)?.amount || 0;
   const expected = pool && amount ? estimate(pool, side, Number(amount)) : 0;
-  useEffect(() => { if (!pool || !amount || !Number.isFinite(Number(amount)) || Number(amount) <= 0 || detailTab !== 'swap') { setMinReceive(''); return; } const precision = receiveAsset?.precision ?? 8; setMinReceive(expected > 0 ? (expected * .995).toFixed(Math.min(precision, 8)) : ''); }, [amount, detailTab, expected, pool, receiveAsset?.precision]);
+  const operationLabel = detailTab === 'swap'
+    ? `兑换 ${sellAsset?.symbol || ''} 为 ${receiveAsset?.symbol || ''}`
+    : liquidityAction === 'add' ? '增加流动性' : '提取流动性';
+  useEffect(() => { if (!pool || !amount || !Number.isFinite(Number(amount)) || Number(amount) <= 0 || detailTab !== 'swap') { setMinReceive(''); return; } const precision = receiveAsset?.precision ?? 8; setMinReceive(minimumReceiveWithSlippage(expected, precision)); }, [amount, detailTab, expected, pool, receiveAsset?.precision]);
 
   const toggleFavorite = async (id: string) => { const next = favorites.includes(id) ? favorites.filter(item => item !== id) : [...favorites, id]; setFavorites(next); await storage.set('liquidity_pool_favorites.v1', next); };
   const openPool = (value: LiquidityPool) => { setPool(value); setPage('detail'); setDetailTab('swap'); setLiquidityAction('add'); setSide('a'); setAmount(''); setAmountB(''); setMinReceive(''); setPreview(null); };
@@ -114,7 +123,10 @@ export function FlashSwapPage() {
       const operationName = preview.operationType === 'exchange' ? 'liquidity_pool_exchange' : preview.operationType === 'deposit' ? 'liquidity_pool_deposit' : 'liquidity_pool_withdraw';
       const signed = await signOperation(operationName, { ...preview.operation, fee: { amount: preview.fee.atomic, asset_id: preview.fee.assetId } }, verified.privateKeyWif);
       await broadcastTransaction(signed);
-      setShowPassword(false); setPreview(null); setAmount(''); setAmountB(''); setNotice('操作已提交节点');
+      const successMessage = preview.operationType === 'exchange'
+        ? `兑换已提交：${preview.sell?.value || ''} ${preview.sell?.symbol || ''} → ${preview.receive?.value || ''} ${preview.receive?.symbol || ''}`
+        : preview.operationType === 'deposit' ? '增加流动性已提交' : '提取流动性已提交';
+      setShowPassword(false); setPreview(null); setAmount(''); setAmountB(''); setNotice(successMessage);
     } catch (cause) { setError(formatGrapheneError(cause)); } finally { setBusy(false); }
   }
 
@@ -147,9 +159,10 @@ export function FlashSwapPage() {
       </section> : <form className="rn-flash-form" onSubmit={event => void makePreview(event)}>
         <h3>{detailTab === 'swap' ? '兑换资产' : liquidityAction === 'add' ? '增加流动性' : '提取流动性'}</h3>
         {detailTab === 'swap' ? <><label>卖出资产 <small>可用 {quantity(selectedBalance, sellAsset?.precision || 8)} {sellAsset?.symbol}</small></label><div className="rn-flash-asset-input"><span>{sellAsset?.symbol}</span><input inputMode="decimal" value={amount} onChange={event => setAmount(filterAmount(event.target.value, sellAsset?.precision || 8))} placeholder="请输入兑换数量"/><button type="button" onClick={() => setAmount(quantity(selectedBalance, sellAsset?.precision || 8))}>全部</button></div><button className="rn-flash-switch" type="button" onClick={() => { setSide(value => value === 'a' ? 'b' : 'a'); setAmount(''); setMinReceive(''); }}>⇅</button><label>最小获得数量 <small>{receiveAsset?.symbol}</small></label><div className="rn-flash-asset-input"><span>{receiveAsset?.symbol}</span><input inputMode="decimal" value={minReceive} onChange={event => setMinReceive(filterAmount(event.target.value, receiveAsset?.precision || 8))} placeholder="自动预留 0.5% 滑点"/></div><div className="rn-flash-stats"><div><span>兑换费率</span><b>{pool.takerFeePercent.toFixed(2)}%</b></div><div><span>预计获得</span><b>{expected > 0 ? `${formatPrice(expected, receiveAsset?.precision || 8)} ${receiveAsset?.symbol}` : '--'}</b></div></div></> : <>{<div className="rn-flash-action-tabs"><button type="button" className={liquidityAction === 'add' ? 'active' : ''} onClick={() => { setLiquidityAction('add'); setAmount(''); setAmountB(''); }}>增加流动性</button><button type="button" className={liquidityAction === 'withdraw' ? 'active' : ''} onClick={() => { setLiquidityAction('withdraw'); setAmount(''); setAmountB(''); }}>提取流动性</button></div>}{liquidityAction === 'add' ? <><label>资产 A <small>可用 {quantity(balances.find(item => item.assetId === pool.assetA.id)?.amount || 0, pool.assetA.precision)} {pool.assetA.symbol}</small></label><div className="rn-flash-asset-input"><span>{pool.assetA.symbol}</span><input inputMode="decimal" value={amount} onChange={event => setAmount(filterAmount(event.target.value, pool.assetA.precision))} placeholder="请输入数量"/><button type="button" onClick={() => setAmount(quantity(balances.find(item => item.assetId === pool.assetA.id)?.amount || 0, pool.assetA.precision))}>全部</button></div><label>资产 B <small>可用 {quantity(balances.find(item => item.assetId === pool.assetB.id)?.amount || 0, pool.assetB.precision)} {pool.assetB.symbol}</small></label><div className="rn-flash-asset-input"><span>{pool.assetB.symbol}</span><input inputMode="decimal" value={amountB} onChange={event => setAmountB(filterAmount(event.target.value, pool.assetB.precision))} placeholder="请输入数量"/><button type="button" onClick={() => setAmountB(quantity(balances.find(item => item.assetId === pool.assetB.id)?.amount || 0, pool.assetB.precision))}>全部</button></div><div className="rn-flash-stats"><div><span>当前池价</span><b>{pool.balanceA > 0 && pool.balanceB > 0 ? formatPrice(pool.balanceB / pool.balanceA, 6) : '--'}</b></div><div><span>预计获得</span><b>-- {pool.shareAsset.symbol}</b></div></div></> : <><label>提取 LP 份额 <small>可用 {quantity(balances.find(item => item.assetId === pool.shareAsset.id)?.amount || 0, pool.shareAsset.precision)} {pool.shareAsset.symbol}</small></label><div className="rn-flash-asset-input"><span>{pool.shareAsset.symbol}</span><input inputMode="decimal" value={amount} onChange={event => setAmount(filterAmount(event.target.value, pool.shareAsset.precision))} placeholder="请输入 LP 数量"/><button type="button" onClick={() => setAmount(quantity(balances.find(item => item.assetId === pool.shareAsset.id)?.amount || 0, pool.shareAsset.precision))}>全部</button></div><div className="rn-flash-stats"><div><span>资产 A</span><b>{pool.assetA.symbol}</b></div><div><span>资产 B</span><b>{pool.assetB.symbol}</b></div><div><span>提取费</span><b>{pool.withdrawalFeePercent.toFixed(2)}%</b></div></div></>}</>}
-        {error && <p className="rn-flash-error">{error}</p>}{notice && <p className="rn-flash-success">{notice}</p>}<button className="rn-flash-submit" type="submit" disabled={busy || status !== 'connected'}>{busy ? '读取链上预览…' : detailTab === 'swap' ? `兑换 ${sellAsset?.symbol} 为 ${receiveAsset?.symbol}` : liquidityAction === 'add' ? '确认增加' : '确认提取'}</button>
+        {error && <p className="rn-flash-error">{error}</p>}<button className="rn-flash-submit" type="submit" disabled={busy || status !== 'connected'}>{busy ? '读取链上预览…' : detailTab === 'swap' ? `兑换 ${sellAsset?.symbol} 为 ${receiveAsset?.symbol}` : liquidityAction === 'add' ? '确认增加' : '确认提取'}</button>
       </form>}
     </> : null}
-    {showPassword && <div className="rn-flash-overlay" role="presentation" onMouseDown={event => event.currentTarget === event.target && setShowPassword(false)}><section className="rn-flash-password" role="dialog" aria-modal="true"><span/><h2>验证设备并签名</h2><p>仅在提交链上操作时验证 Passkey，私钥不会离开当前页面内存。</p><div><button type="button" onClick={() => setShowPassword(false)}>取消</button><button type="button" onClick={() => void submit()} disabled={busy}>{busy ? '验证并广播中…' : '验证设备并签名'}</button></div></section></div>}
+    {notice && <div className="rn-operation-toast success" role="status"><SuccessCheckIcon /><span>{notice}</span></div>}
+    {showPassword && <div className="rn-flash-overlay" role="presentation" onMouseDown={event => event.currentTarget === event.target && setShowPassword(false)}><section className="rn-flash-password" role="dialog" aria-modal="true"><span/><h2>{signingKeyUnlocked ? operationLabel : '验证设备并签名'}</h2><p>{signingKeyUnlocked ? '设备已解锁，将直接提交这笔链上操作。' : '仅在提交链上操作时验证 Passkey，私钥不会离开当前页面内存。'}</p><div><button type="button" onClick={() => setShowPassword(false)}>取消</button><button type="button" onClick={() => void submit()} disabled={busy}>{busy ? '提交中…' : signingKeyUnlocked ? operationLabel : '验证设备并签名'}</button></div></section></div>}
   </main>;
 }

@@ -4,6 +4,7 @@ import { type AccountAssetBalance, type AccountOrder, type LimitOrderPreview, ty
 import { useAuth } from '../state/AuthProvider';
 import { useChain } from '../state/ChainProvider';
 import { formatGrapheneError } from '../services/grapheneError';
+import { KlineCandlestickIcon, SettingsGearIcon, SuccessCheckIcon } from '../components/AppIcons';
 
 type Side = 'buy' | 'sell';
 type OrderType = 'limit' | 'market';
@@ -107,6 +108,11 @@ export function TradePage() {
   }, [loadOrderBook, pair, status]);
   useEffect(() => { void refreshAccount(); }, [refreshAccount, pair]);
   useEffect(() => { if (!price && ticker?.latest) setPrice(priceText(ticker.latest)); }, [price, ticker?.latest]);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 3200);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   const baseBalance = assets.find(item => item.symbol === pair.base)?.amount ?? 0;
   const quoteBalance = assets.find(item => item.symbol === pair.quote)?.amount ?? 0;
@@ -147,7 +153,8 @@ export function TradePage() {
       if (signer.verifiedRole !== 'active') throw new Error('当前密钥只匹配 owner 权限，交易需要 active 权限密钥');
       const signed = await signOperation('limit_order_create', { ...nextPreview.operation, fee: { amount: nextPreview.fee.atomic, asset_id: nextPreview.fee.assetId } }, signer.privateKeyWif);
       await broadcastTransaction(signed);
-      setNotice(`${side === 'buy' ? '买入' : '卖出'} ${amount} ${pair.base} 成功`);
+      const orderLabel = side === 'buy' ? '买单' : '卖单';
+      setNotice(orderType === 'limit' ? `限价${orderLabel}已挂单：${amount} ${pair.base}` : `市价${orderLabel}已提交：${amount} ${pair.base}`);
       setAmount(''); setTotal(''); setSlider(0); await refreshAccount();
     } catch (cause) { setError(formatGrapheneError(cause)); } finally { setLoading(false); }
   }
@@ -170,7 +177,7 @@ export function TradePage() {
   }
 
   return <div className="rn-trade-page">
-    <header className="rn-trade-header"><h1>{pair.base}/{pair.quote}</h1><div><Link to={`/markets/${pair.base}/${pair.quote}/kline`} aria-label="K线">⌁</Link><Link to="/settings" aria-label="设置">⚙</Link></div></header>
+    <header className="rn-trade-header"><h1>{pair.base}/{pair.quote}</h1><div><Link className="rn-trade-kline-icon" to={`/markets/${pair.base}/${pair.quote}/kline`} aria-label="K线"><KlineCandlestickIcon /></Link><Link className="rn-trade-settings-icon" to="/settings" aria-label="设置"><SettingsGearIcon /></Link></div></header>
     <main className="rn-trade-content">
       <div className="rn-trade-main-grid">
         <section className="rn-trade-form-panel">
@@ -188,8 +195,9 @@ export function TradePage() {
       <section className="rn-trade-bottom"><div className="rn-trade-bottom-tabs"><button type="button" className={bottomTab === 'orders' ? 'active' : ''} onClick={() => setBottomTab('orders')}>当前委托 ({orders.length})</button><button type="button" className={bottomTab === 'positions' ? 'active' : ''} onClick={() => setBottomTab('positions')}>持有币种 ({assets.length})</button></div>
         {bottomTab === 'orders' ? <><div className="rn-trade-filter"><label><input type="checkbox" checked={hideOtherPairs} onChange={event => setHideOtherPairs(event.target.checked)}/>隐藏其他交易对</label><button type="button" onClick={() => void cancelAll()} disabled={loading}>撤销全部</button></div><div className="rn-trade-orders">{visibleOrders.length ? visibleOrders.map(order => <OrderRow key={order.id} order={order} pair={pair} onCancel={orderToCancel => void cancelOrder(orderToCancel)}/>) : <p className="rn-trade-empty">暂无委托</p>}</div></> : <div className="rn-trade-positions">{assets.length ? assets.map(asset => <div key={asset.assetId}><strong>{asset.symbol}</strong><span>{amountText(asset.amount)}</span></div>) : <p className="rn-trade-empty">暂无持仓</p>}</div>}
       </section>
-      {error && <p className="rn-trade-error">{error}</p>}{notice && <p className="rn-trade-notice">{notice}</p>}
+      {error && <p className="rn-trade-error">{error}</p>}
     </main>
+    {notice && <div className="rn-operation-toast success" role="status"><SuccessCheckIcon /><span>{notice}</span></div>}
     {preview && <div className="rn-trade-preview"><span>最近委托</span><strong>{preview.sell.value} {preview.sell.symbol} → {preview.receive.value} {preview.receive.symbol}</strong><small>手续费 {preview.fee.value} {preview.fee.symbol}</small></div>}
     {showOrderType && <OrderTypeSheet value={orderType} onChange={value => { setOrderType(value); if (value === 'market') setPrice(''); }} onClose={() => setShowOrderType(false)} />}
   </div>;

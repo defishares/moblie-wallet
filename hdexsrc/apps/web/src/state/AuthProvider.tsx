@@ -32,6 +32,7 @@ interface AuthContextValue {
   hasBiometricVault: (accountName: string) => Promise<boolean>;
   hasPinVault: (accountName: string) => Promise<boolean>;
   ensureSigningKey: () => Promise<WebWalletSession>;
+  lockSigningKey: () => void;
   signingKeyUnlocked: boolean;
   signingKeyTimeoutMinutes: number;
   setSigningKeyTimeoutMinutes: (minutes: number) => Promise<void>;
@@ -80,13 +81,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const remaining = signingKeyUnlockedAt + signingKeyTimeoutMinutes * 60_000 - Date.now();
     if (remaining <= 0) {
       setSession(current => current ? { ...current, privateKeyWif: '' } : current);
-      setAccounts(current => current.map(item => item.account.id === session.account.id ? { ...item, privateKeyWif: '' } : item));
+      setAccounts(current => current.map(item => ({ ...item, privateKeyWif: '' })));
       setSigningKeyUnlockedAt(null);
       return;
     }
     const timer = window.setTimeout(() => {
       setSession(current => current?.account.id === session.account.id ? { ...current, privateKeyWif: '' } : current);
-      setAccounts(current => current.map(item => item.account.id === session.account.id ? { ...item, privateKeyWif: '' } : item));
+      setAccounts(current => current.map(item => ({ ...item, privateKeyWif: '' })));
       setSigningKeyUnlockedAt(null);
     }, remaining);
     return () => window.clearTimeout(timer);
@@ -178,6 +179,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return unlocked;
   }, [biometricSupported, pinSupported, session, signingKeyTimeoutMinutes, signingKeyUnlockedAt]);
 
+  const lockSigningKey = useCallback(() => {
+    if (!session) return;
+    // Keep the authenticated account identity in memory, but remove the WIF
+    // from both session and account caches so no subsequent signing call can
+    // reuse a key without a fresh local-device verification.
+    const accountId = session.account.id;
+    setSession(current => current?.account.id === accountId ? { ...current, privateKeyWif: '' } : current);
+    setAccounts(current => current.map(item => ({ ...item, privateKeyWif: '' })));
+    setSigningKeyUnlockedAt(null);
+  }, [session]);
+
   const setSigningKeyTimeoutMinutes = useCallback(async (minutes: number) => {
     const normalized = Math.max(MIN_SIGNING_KEY_TIMEOUT_MINUTES, Math.min(MAX_SIGNING_KEY_TIMEOUT_MINUTES, Math.round(minutes)));
     setSigningKeyTimeoutMinutesState(normalized);
@@ -217,6 +229,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     hasBiometricVault,
     hasPinVault,
     ensureSigningKey,
+    lockSigningKey,
     signingKeyUnlocked: Boolean(session?.privateKeyWif && signingKeyUnlockedAt != null),
     signingKeyTimeoutMinutes,
     setSigningKeyTimeoutMinutes,
@@ -228,7 +241,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     lastAccountName,
     logout,
     switchAccount,
-  }), [accounts, biometricLogin, biometricSupported, deleteBiometricVault, deletePinVault, ensureSigningKey, hasBiometricVault, hasPinVault, lastAccountName, login, logout, pinLogin, pinSupported, session, sessionHydrated, setSigningKeyTimeoutMinutes, signingKeyTimeoutMinutes, signingKeyUnlockedAt, setupBiometricVault, setupPinVault, switchAccount]);
+  }), [accounts, biometricLogin, biometricSupported, deleteBiometricVault, deletePinVault, ensureSigningKey, hasBiometricVault, hasPinVault, lastAccountName, lockSigningKey, login, logout, pinLogin, pinSupported, session, sessionHydrated, setSigningKeyTimeoutMinutes, signingKeyTimeoutMinutes, signingKeyUnlockedAt, setupBiometricVault, setupPinVault, switchAccount]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

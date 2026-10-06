@@ -4,6 +4,7 @@ import { MarketRow } from '../components/MarketRow';
 import { useAuth } from '../state/AuthProvider';
 import { useChain } from '../state/ChainProvider';
 import { runtimeConfig } from '../services/runtime';
+import { SettingsGearIcon } from '../components/AppIcons';
 
 type HomeAnnouncement = { id: string; title: string; content: string; publishedAt?: number; expiresAt?: number };
 
@@ -51,8 +52,8 @@ function conversionRate(from: string, to: string, tickers: ReturnType<typeof use
 }
 
 export function DashboardPage() {
-  const { client, status, tickers, favoriteKeys, valuationAsset, loadAccountAssets } = useChain();
-  const { session, ensureSigningKey, signingKeyUnlocked } = useAuth();
+  const { client, status, tickers, favoriteKeys, valuationAsset, loadAccountAssets, reconnect } = useChain();
+  const { session, ensureSigningKey, lockSigningKey, signingKeyUnlocked } = useAuth();
   const [accountAssets, setAccountAssets] = useState<Awaited<ReturnType<typeof loadAccountAssets>> | null>(null);
   const [accountError, setAccountError] = useState<string | null>(null);
   const [rank, setRank] = useState<'favorites' | 'hot' | 'gainers' | 'losers'>('hot');
@@ -62,6 +63,7 @@ export function DashboardPage() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [buyMessage, setBuyMessage] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const refreshAccount = useCallback(async () => {
     if (!session || status !== 'connected') return;
     try {
@@ -104,18 +106,31 @@ export function DashboardPage() {
   const totalValue = accountAssets?.balances.reduce((sum, balance) => sum + Math.max(0, balance.amount * conversionRate(balance.symbol, valuationAsset, tickers)), 0);
   const activeAnnouncement = announcements[0];
   const unlockForSigning = async () => {
-    if (unlocking || signingKeyUnlocked) return;
+    if (unlocking) return;
+    if (signingKeyUnlocked) {
+      lockSigningKey();
+      return;
+    }
     setUnlocking(true);
     setAccountError(null);
     try { await ensureSigningKey(); }
     catch (cause) { setAccountError(cause instanceof Error ? cause.message : '设备验证失败，请重试'); }
     finally { setUnlocking(false); }
   };
+  const reconnectNode = async () => {
+    if (reconnecting || status === 'connected') return;
+    setReconnecting(true);
+    setAccountError(null);
+    try { await reconnect(); }
+    catch (cause) { setAccountError(cause instanceof Error ? cause.message : '节点重连失败，请稍后重试'); }
+    finally { setReconnecting(false); }
+  };
+  const networkLabel = status === 'connected' ? '网络连接正常' : status === 'connecting' || reconnecting ? '正在连接节点' : '网络连接异常，点击重连';
 
   return <div className="rn-page rn-home-page">
     <header className="rn-home-header">
       <div className="rn-balance-title">总资产估值 <button className="icon-button" onClick={() => setHideBalance(value => !value)} aria-label={hideBalance ? '显示资产' : '隐藏资产'}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-5 9.5-5 9.5 5 9.5 5-3.5 5-9.5 5-9.5-5-9.5-5Z" fill="none" stroke="currentColor" strokeWidth="2" /><circle cx="12" cy="12" r="2.5" fill="currentColor" /></svg></button></div>
-      <div className="rn-home-actions"><Link className="rn-icon-button rn-home-settings-icon" to="/settings" aria-label="设置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.7 3.5.5-1h3.6l.5 1 1 .5 1.1-.2 2.5 2.5-.2 1.1.5 1 1 .5v3.6l-1 .5-.5 1 .2 1.1-2.5 2.5-1.1-.2-1 .5-.5 1h-3.6l-.5-1-1-.5-1.1.2-2.5-2.5.2-1.1-.5-1-1-.5V8.9l1-.5.5-1-.2-1.1 2.5-2.5 1.1.2 1-.5Z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/><circle cx="12" cy="10.7" r="2.5" fill="none" stroke="currentColor" strokeWidth="1.7"/></svg></Link><button type="button" className={`rn-icon-button rn-lock-button${signingKeyUnlocked ? ' unlocked' : ''}`} onClick={() => void unlockForSigning()} disabled={unlocking} title={signingKeyUnlocked ? '设备验证已解锁，点击后无需再次验证' : '点击验证设备或 PIN 并解锁'} aria-label={signingKeyUnlocked ? '设备验证已解锁' : '验证设备或 PIN'}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />{signingKeyUnlocked ? <path d="M8 10V7a4 4 0 0 1 7.5-2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /> : <path d="M8 10V7a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />}<circle cx="12" cy="15" r="1.2" fill="currentColor" /></svg></button></div>
+      <div className="rn-home-actions"><button type="button" className={`rn-network-status ${status}`} onClick={() => void reconnectNode()} disabled={status === 'connected' || reconnecting} title={networkLabel} aria-label={networkLabel}><i className="rn-network-status-dot" /></button><Link className="rn-icon-button rn-home-settings-icon" to="/settings" aria-label="设置"><SettingsGearIcon /></Link><button type="button" className={`rn-icon-button rn-lock-button${signingKeyUnlocked ? ' unlocked' : ''}`} onClick={() => void unlockForSigning()} disabled={unlocking} title={signingKeyUnlocked ? '点击锁定并清除内存中的私钥' : '点击验证设备或 PIN 并解锁'} aria-label={signingKeyUnlocked ? '锁定签名密钥' : '验证设备或 PIN 并解锁'}><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />{signingKeyUnlocked ? <path d="M8 10V7a4 4 0 0 1 7.5-2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /> : <path d="M8 10V7a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />}<circle cx="12" cy="15" r="1.2" fill="currentColor" /></svg></button></div>
       <div className="rn-balance-value">{hideBalance ? '****' : totalValue === undefined ? '--' : totalValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}<span>{valuationAsset}</span></div>
     </header>
     <section className="rn-quick-actions" aria-label="快捷操作">

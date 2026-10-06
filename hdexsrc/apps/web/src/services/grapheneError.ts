@@ -11,6 +11,7 @@ const GRAPHENE_ERROR_MESSAGES: Record<string, string> = {
   'missing required owner authority': '签名无效。',
   'missing required other authority': '签名无效。',
   'fee pool balance': '手续费资产对应的手续费池余额不足。',
+  'unable to exchange at expected price': '兑换数量过小或流动性池价格已变化，请提高兑换金额或降低最小获得数量后重试。',
   'unable to find object': '操作失败，目标已经被删除了。',
   'initial collateral ratio (icr)': '抵押率不能低于初始抵押率。',
 };

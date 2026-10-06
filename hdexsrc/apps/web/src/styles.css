@@ -150,6 +150,12 @@ body { background: #0d0d0d; color: #fff; }
 .icon-button svg { width: 20px; height: 20px; }
 .rn-icon-button svg { width: 23px; height: 23px; }
 .rn-home-settings-icon svg { width: 27px; height: 27px; }
+.rn-network-status { display: inline-grid; width: 32px; height: 32px; place-items: center; padding: 0; border: 0; border-radius: 50%; background: #1a1a1a; }
+.rn-network-status:not(:disabled) { cursor: pointer; }
+.rn-network-status-dot { display: block; width: 9px; height: 9px; border-radius: 50%; background: #ff4757; box-shadow: 0 0 0 3px rgba(255,71,87,.14); }
+.rn-network-status.connected .rn-network-status-dot { background: #00d094; box-shadow: 0 0 0 3px rgba(0,208,148,.14); }
+.rn-network-status.connecting .rn-network-status-dot { background: #ffd166; box-shadow: 0 0 0 3px rgba(255,209,102,.14); animation: rn-network-pulse 1s ease-in-out infinite; }
+@keyframes rn-network-pulse { 50% { opacity: .35; transform: scale(.75); } }
 .rn-lock-button.unlocked { color: #00d094; }
 .rn-lock-button:disabled { opacity: .65; cursor: wait; }
 .rn-home-actions { position: absolute; top: 16px; right: 20px; display: flex; align-items: center; gap: 6px; }
@@ -332,6 +338,15 @@ body { background: #0d0d0d; color: #fff; }
 .rn-register-form .auth-submit:disabled { background: #333; }
 .rn-register-login { margin-top: 24px; color: #888; font-size: 14px; text-align: center; }
 .rn-register-login b { color: #00d094; font-weight: 600; }
+.rn-register-success-backdrop { position: fixed; z-index: 95; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.78); }
+.rn-register-success { width: min(100%, 390px); padding: 30px 24px 24px; border: 1px solid #29443d; border-radius: 20px; background: #171717; box-shadow: 0 24px 80px rgba(0,0,0,.6); text-align: center; }
+.rn-register-success-icon { display: grid; width: 64px; height: 64px; place-items: center; margin: 0 auto 16px; border-radius: 50%; color: #07110f; background: #00d094; }
+.rn-register-success-icon svg { width: 34px; height: 34px; }
+.rn-register-success h2 { margin: 0 0 12px; color: #fff; font-size: 22px; }
+.rn-register-success p { margin: 7px 0; color: #cfcfcf; font-size: 14px; line-height: 1.6; }
+.rn-register-success p b { color: #00d094; }
+.rn-register-success-hint { color: #ffbd66 !important; font-size: 13px !important; }
+.rn-register-success button { width: 100%; min-height: 48px; margin-top: 18px; border: 0; border-radius: 10px; color: #07110f; background: #00d094; font-size: 16px; font-weight: 700; }
 .rn-login-page { width: 100vw !important; max-width: none !important; margin-left: calc(50% - 50vw); padding: 16px clamp(20px, 4vw, 40px) 20px; }
 .rn-login-page > * { width: 100%; }
 .rn-login-title { margin: 16px 0 24px; color: #fff; font-size: 24px; font-weight: 700; }
@@ -357,6 +372,9 @@ body { background: #0d0d0d; color: #fff; }
 @keyframes rn-login-spin { to { transform: rotate(360deg); } }
 .rn-auth-restore-page { display: flex; min-height: 100vh; align-items: center; justify-content: center; gap: 10px; color: #9fe8cf; background: #0d0d0d; font-size: 14px; }
 .rn-login-error { display: flex; align-items: center; gap: 8px; padding: 12px 16px; margin-bottom: 16px; border-radius: 8px; color: #ff6b6b; background: rgba(255,107,107,.1); font-size: 14px; }
+.rn-login-success { display: flex; align-items: center; gap: 10px; padding: 12px 14px; margin-bottom: 16px; border: 1px solid rgba(0,208,148,.3); border-radius: 9px; color: #b9f4df; background: rgba(0,208,148,.09); font-size: 13px; line-height: 1.5; }
+.rn-login-success > span:first-child { display: grid; width: 22px; height: 22px; flex: 0 0 auto; place-items: center; border-radius: 50%; color: #07110f; background: #00d094; font-weight: 800; }
+.rn-login-success b { color: #fff; }
 .rn-login-placeholder { display: flex; min-height: 310px; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
 .rn-login-placeholder > span { color: #333; font-size: 48px; line-height: 1; }
 .rn-login-placeholder strong { color: #666; font-size: 18px; font-weight: 500; }
@@ -366,6 +384,7 @@ body { background: #0d0d0d; color: #fff; }
 .rn-login-modal-backdrop { position: fixed; z-index: 90; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.72); }
 .rn-login-modal { width: min(100%, 390px); padding: 28px 22px 20px; border: 1px solid #303030; border-radius: 18px; background: #171717; box-shadow: 0 20px 70px rgba(0,0,0,.55); text-align: center; }
 .rn-login-modal-icon { display: grid; width: 52px; height: 52px; place-items: center; margin: 0 auto 14px; border-radius: 50%; color: #07110f; background: #00d094; font-size: 30px; font-weight: 800; }
+.rn-login-modal-icon.security svg { width: 31px; height: 31px; }
 .rn-login-modal h2 { margin: 0 0 10px; color: #fff; font-size: 20px; }
 .rn-login-modal p { margin: 0; color: #999; font-size: 13px; line-height: 1.65; text-align: left; }
 .rn-login-modal .rn-login-submit { width: 100%; }
@@ -462,7 +481,9 @@ body { background: #0d0d0d; color: #fff; }
 .rn-trade-header { display: flex; align-items: center; justify-content: space-between; min-height: 58px; padding: 10px 16px; }
 .rn-trade-header h1 { margin: 0; font-size: 18px; font-weight: 600; }
 .rn-trade-header > div { display: flex; align-items: center; gap: 4px; }
-.rn-trade-header a { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 50%; color: #fff; background: #1a1a1a; font-size: 21px; text-decoration: none; }
+.rn-trade-header a { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 50%; color: #fff; background: #1a1a1a; text-decoration: none; }
+.rn-trade-header a svg { width: 23px; height: 23px; }
+.rn-trade-header a.rn-trade-settings-icon svg { width: 27px; height: 27px; }
 .rn-trade-content { display: grid; gap: 18px; padding: 0 12px 20px; }
 .rn-trade-main-grid { display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: 12px; align-items: start; }
 .rn-trade-form-panel, .rn-trade-book-panel { min-width: 0; }
@@ -532,6 +553,9 @@ body { background: #0d0d0d; color: #fff; }
 .rn-trade-empty { display: grid; min-height: 100px; place-items: center; margin: 0; font-size: 14px; }
 .rn-trade-error, .rn-trade-notice { margin: 0; padding: 10px 12px; border-radius: 8px; color: #ff9aa4; background: rgba(255,71,87,.1); font-size: 12px; line-height: 1.5; }
 .rn-trade-notice { color: #00d094; background: rgba(0,208,148,.1); }
+.rn-operation-toast { position: fixed; z-index: 120; top: 18%; left: 50%; display: flex; width: min(calc(100% - 36px), 420px); align-items: center; gap: 10px; padding: 15px 18px; border: 1px solid rgba(0,208,148,.45); border-radius: 12px; color: #d7fff2; background: rgba(15,48,39,.96); box-shadow: 0 16px 42px rgba(0,0,0,.45); font-size: 14px; font-weight: 600; transform: translateX(-50%); animation: rn-toast-in .2s ease-out; }
+.rn-operation-toast svg { width: 23px; height: 23px; flex: 0 0 auto; color: #00d094; }
+@keyframes rn-toast-in { from { opacity: 0; transform: translate(-50%, -8px); } to { opacity: 1; transform: translate(-50%, 0); } }
 .rn-trade-preview { position: fixed; z-index: 25; right: 16px; bottom: 76px; display: grid; gap: 4px; max-width: calc(100% - 32px); padding: 10px 13px; border-radius: 10px; color: #fff; background: #252525; box-shadow: 0 8px 24px rgba(0,0,0,.35); font-size: 11px; }
 .rn-trade-preview span, .rn-trade-preview small { color: #888; }
 .rn-trade-modal-backdrop { position: fixed; z-index: 50; inset: 0; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.7); }
@@ -584,7 +608,7 @@ body { background: #0d0d0d; color: #fff; }
 .rn-kline-indicators button { font-size: 10px; }
 .rn-kline-indicators i { flex: 1; min-width: 10px; }
 .rn-kline-indicators .indicator-settings { color: #c5cbd1; font-size: 16px; }
-.rn-kline-canvas { display: block; width: 100%; height: min(78vw, 510px); min-height: 330px; touch-action: none; cursor: crosshair; }
+.rn-kline-canvas { display: block; width: 100%; height: min(78vw, 510px); min-height: 330px; touch-action: none; cursor: crosshair; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .rn-kline-empty { display: grid; min-height: 360px; place-items: center; color: #848e9c; font-size: 13px; }
 .rn-kline-error { color: #ff9da8; }
 .rn-kline-bottom { overflow: hidden; border-radius: 8px; background: #0d0d0d; }
@@ -1248,3 +1272,12 @@ body { background: #0d0d0d; color: #fff; }
 .rn-history-page .rn-history-message .accent, .rn-history-page .rn-history-detail-message .accent { color: #13a9e8; }
 .rn-history-page .rn-history-message .asset, .rn-history-page .rn-history-detail-message .asset { color: #16aeea; }
 .rn-history-page .rn-history-detail-message { padding: 10px 12px; margin: 0 0 14px; border-left: 2px solid #2b87ae; color: #d9d9d9; background: #11181c; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+
+/* BSC deposit/withdraw history has three cells: asset, amount/status, arrow.
+   Keep it separate from the account-history four-column layout above. */
+.rn-history-page.rn-bsc-history-page .rn-history-row { grid-template-columns: minmax(0, 1fr) minmax(126px, 42%) 20px; min-height: 76px; gap: 10px; padding: 0 4px 0 16px; }
+.rn-history-page.rn-bsc-history-page .rn-history-row-right { min-width: 0; margin-right: 2px; text-align: right; }
+.rn-history-page.rn-bsc-history-page .rn-history-row-right strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 380px) {
+  .rn-history-page.rn-bsc-history-page .rn-history-row { grid-template-columns: minmax(0, 1fr) minmax(112px, 43%) 20px; gap: 8px; }
+}

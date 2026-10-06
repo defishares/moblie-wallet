@@ -41,13 +41,20 @@ test('rejects a password whose derived public key is not authorized', async () =
 
 test('serializes a locally signed transfer without broadcasting', async () => {
   const key = PrivateKey.fromSeed('web-signing-test');
+  const feeRequests: unknown[] = [];
   const client = {
     getDynamicGlobalProperties: async () => ({
       head_block_number: 123,
       head_block_id: '0000000001000000000000000000000000000000000000000000000000000000',
       time: '2026-10-02T04:00:00',
     }),
-    db: async () => '7089639ad55d91ef53946f3fc4dc86ea5b8a4917edcfce6d3c39bc259657acb',
+    db: async (method: string, params: unknown[]) => {
+      if (method === 'get_required_fees') {
+        feeRequests.push(params);
+        return [{ amount: '123', asset_id: '1.3.0' }];
+      }
+      return '7089639ad55d91ef53946f3fc4dc86ea5b8a4917edcfce6d3c39bc259657acb';
+    },
   } as any;
   const transaction = await signTransferPreview(client, {
     from: { id: '1.2.1', name: 'from' },
@@ -58,14 +65,23 @@ test('serializes a locally signed transfer without broadcasting', async () => {
   }, key.toWif());
   assert.equal(Array.isArray(transaction.signatures), true);
   assert.equal((transaction as any).operations?.[0]?.[0], 0);
+  assert.equal((transaction as any).operations?.[0]?.[1]?.fee?.amount, '123');
+  assert.equal(feeRequests.length, 1);
 });
 
 test('encrypts a UTF-8 memo using the RN transfer format', async () => {
   (BitsharesWs as any).default.ChainConfig.setPrefix('DFS');
   const key = PrivateKey.fromSeed('web-memo-test');
+  let feeOperation: any;
   const client = {
     getDynamicGlobalProperties: async () => ({ head_block_number: 123, head_block_id: '0000000001000000000000000000000000000000000000000000000000000000', time: '2026-10-02T04:00:00' }),
-    db: async () => '7089639ad55d91ef53946f3fc4dc86ea5b8a4917edcfce6d3c39bc259657acb',
+    db: async (method: string, params: any[]) => {
+      if (method === 'get_required_fees') {
+        feeOperation = params[0][0][1];
+        return [{ amount: '321', asset_id: '1.3.0' }];
+      }
+      return '7089639ad55d91ef53946f3fc4dc86ea5b8a4917edcfce6d3c39bc259657acb';
+    },
   } as any;
   const transaction = await signTransferPreview(client, {
     from: { id: '1.2.1', name: 'from' }, to: { id: '1.2.2', name: 'to' },
@@ -79,6 +95,9 @@ test('encrypts a UTF-8 memo using the RN transfer format', async () => {
   assert.equal(operation.memo.to, key.toPublicKey().toString());
   assert.equal(typeof operation.memo.nonce, 'string');
   assert.equal(typeof operation.memo.message, 'string');
+  assert.equal(typeof feeOperation.memo?.message, 'string');
+  assert.match(feeOperation.memo.message, /^[0-9a-f]+$/i);
+  assert.equal(operation.fee.amount, '321');
 });
 
 test('maps Graphene broadcast errors to RN-compatible messages', () => {

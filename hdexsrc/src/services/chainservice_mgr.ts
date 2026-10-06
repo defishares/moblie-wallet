@@ -2713,7 +2713,7 @@ const GRAPHENE_ERROR_MESSAGES: Record<string, string> = {
 
   // 流动性池相关
   'unable to exchange at expected price':
-    '流动性池价格已经变化，请刷新后再试。',
+    '兑换数量过小或流动性池价格已变化，请提高兑换金额或降低最小获得数量后重试。',
   'aborting due to zero outcome':
     '流动性代币达到最大供应量或者预计获得数量为零。',
 

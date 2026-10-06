@@ -11,6 +11,7 @@ import { UnlockModal, type UnlockedKeys } from '../components/UnlockModal';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../types';
+import { minimumReceiveWithSlippage } from '@defishares/core';
 import { collectLiquidityHistoryReferences, parseLiquidityHistory, type HistoryAsset, type LiquidityHistoryEntry } from '../utils/liquidityPoolHistory';
 import { getLiquidityPoolMetrics, type LiquidityPoolStatistics } from '../utils/liquidityPoolStats';
 
@@ -163,7 +164,7 @@ const FlashSwapScreen: React.FC = () => {
     }
     const estimated = estimateSwap(pool, sellSide, Number(sellAmount));
     const precision = sellSide === 'a' ? pool.precisionB : pool.precisionA;
-    setMinReceive(estimated > 0 ? (estimated * 0.995).toFixed(Math.min(precision, 8)) : '');
+    setMinReceive(minimumReceiveWithSlippage(estimated, precision));
   }, [pool, sellAmount, sellSide]);
 
   const available = (assetId: string, precision: number) => displayAmount((balances[assetId] || 0) / 10 ** precision);
@@ -179,7 +180,8 @@ const FlashSwapScreen: React.FC = () => {
     const sellPrecision = sellSide === 'a' ? pool.precisionA : pool.precisionB; const receivePrecision = sellSide === 'a' ? pool.precisionB : pool.precisionA;
     const sell = chainAmount(sellAmount, sellPrecision);
     const estimated = sell ? estimateSwap(pool, sellSide, Number(sellAmount)) : 0;
-    const min = chainAmount(minReceive, receivePrecision) || (estimated > 0 ? Math.floor(estimated * 0.995 * 10 ** receivePrecision) : 0);
+    const safeMinimum = minimumReceiveWithSlippage(estimated, receivePrecision);
+    const min = chainAmount(minReceive, receivePrecision) || chainAmount(safeMinimum, receivePrecision) || 0;
     if (!sell) { Toast.warning('请输入兑换数量'); return; }
     if (!min) { Toast.warning('请输入最小获得数量，或等待池子储备数据同步'); return; }
     UnlockModal.show({ accountId: account!.id, accountName: account!.name, onSuccess: (keys: UnlockedKeys) => { if (!keys.active) return Toast.error('缺少资金私钥。'); BlockView.show('正在兑换...'); chainServiceMgr.exchangeLiquidity({ accountId: account!.id, poolId: pool.id, amountToSell: sell, sellAssetId: sellSide === 'a' ? pool.assetAId : pool.assetBId, minToReceive: min, receiveAssetId: sellSide === 'a' ? pool.assetBId : pool.assetAId }, keys.active).then(() => { setHistoryReload(v => v + 1); Toast.success('兑换已提交'); setSellAmount(''); setMinReceive(''); }).catch(e => Toast.error(formatGrapheneError(e))).finally(() => BlockView.hide()); } });
