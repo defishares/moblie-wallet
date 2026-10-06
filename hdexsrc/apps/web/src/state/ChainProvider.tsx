@@ -63,6 +63,7 @@ interface ChainContextValue {
   broadcastTransaction: (transaction: Record<string, unknown>) => Promise<unknown>;
   authenticateAccount: (accountName: string, password: string) => Promise<WebWalletSession>;
   switchNode: (url: string) => Promise<void>;
+  reconnect: () => Promise<void>;
   customNodes: string[];
   addCustomNode: (url: string) => Promise<void>;
   removeCustomNode: (url: string) => Promise<void>;
@@ -91,6 +92,9 @@ export function ChainProvider({ children }: { children: React.ReactNode }) {
   const accountOrdersInflightRef = useRef(new Map<string, Promise<{ account: FullAccountData['account']; orders: AccountOrder[] }>>());
   const lendingCacheRef = useRef(new Map<string, LendingOverview>());
   const lendingInflightRef = useRef(new Map<string, Promise<LendingOverview>>());
+  const reconnectInFlightRef = useRef<Promise<void> | null>(null);
+  const hiddenAtRef = useRef<number | null>(document.visibilityState === 'hidden' ? Date.now() : null);
+  const lastHealthCheckAtRef = useRef(0);
 
   useEffect(() => {
     void storageRef.current.get<string>('asset_valuation.v1').then(saved => {
@@ -186,26 +190,6 @@ export function ChainProvider({ children }: { children: React.ReactNode }) {
     };
   }, [loadConfiguredPairs, refreshTickers]);
 
-  useEffect(() => {
-    if (status !== 'connected') return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const schedule = () => {
-      timer = setTimeout(async () => {
-        if (document.visibilityState === 'visible') {
-          try { await refreshTickers(); } catch { /* connection status is surfaced by the next request */ }
-        }
-        schedule();
-      }, 15_000);
-    };
-    schedule();
-    const onVisibility = () => { if (document.visibilityState === 'visible') void refreshTickers(); };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      if (timer) clearTimeout(timer);
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, [refreshTickers, status]);
-
   const toggleFavorite = useCallback(async (key: string) => {
     const next = favoriteKeys.includes(key) ? favoriteKeys.filter(item => item !== key) : [...favoriteKeys, key];
     setFavoriteKeys(next);
@@ -278,12 +262,128 @@ export function ChainProvider({ children }: { children: React.ReactNode }) {
     (accountName: string, password: string) => authenticateAccountPassword(clientRef.current, accountName, password),
     [],
   );
+  const healthCheck = useCallback(async () => {
+    if (!clientRef.current.isConnected) throw new Error('节点连接未建立');
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        clientRef.current.db('get_dynamic_global_properties'),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('节点健康检查超时')), 7_000);
+        }),
+      ]);
+      lastHealthCheckAtRef.current = Date.now();
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }, []);
   const switchNode = useCallback(async (url: string) => {
     clearAccountCache();
     setStatus('connecting'); setError(null);
-    try { const result = await clientRef.current.connect(url, runtimeConfig.network.chainId); setConnectedUrl(result.url); setStatus('connected'); await refreshTickers(); }
+    try {
+      const result = await clientRef.current.connect(url, runtimeConfig.network.chainId);
+      setConnectedUrl(result.url);
+      setStatus('connected');
+      await loadConfiguredPairs();
+      await refreshTickers();
+    }
     catch (cause) { setStatus('error'); setError(cause instanceof Error ? cause.message : '节点连接失败'); throw cause; }
-  }, [clearAccountCache, refreshTickers]);
+  }, [clearAccountCache, loadConfiguredPairs, refreshTickers]);
+  const reconnect = useCallback(async () => {
+    if (reconnectInFlightRef.current) {
+      await reconnectInFlightRef.current;
+      return;
+    }
+    clearAccountCache();
+    setStatus('connecting'); setError(null);
+    const candidates = [...new Set([...webSocketNodes, ...customNodes])];
+    const task = (async () => {
+      try {
+        const result = await clientRef.current.connectWithFallback(candidates, runtimeConfig.network.chainId);
+        setConnectedUrl(result.url);
+        setStatus('connected');
+        setError(null);
+        await loadConfiguredPairs();
+        await refreshTickers();
+      } catch (cause) {
+        setStatus('error');
+        setError(cause instanceof Error ? cause.message : '节点连接失败');
+        throw cause;
+      }
+    })();
+    reconnectInFlightRef.current = task;
+    try {
+      await task;
+    } finally {
+      if (reconnectInFlightRef.current === task) reconnectInFlightRef.current = null;
+    }
+  }, [clearAccountCache, customNodes, loadConfiguredPairs, refreshTickers]);
+
+  useEffect(() => {
+    const unsubscribe = clientRef.current.onConnectionLost(error => {
+      setStatus('error');
+      setError(error.message);
+      void reconnect().catch(() => undefined);
+    });
+    return unsubscribe;
+  }, [reconnect]);
+
+  useEffect(() => {
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const checkOrReconnect = async (forceReconnect = false) => {
+      if (disposed || document.visibilityState !== 'visible' || navigator.onLine === false) return;
+      const hiddenFor = hiddenAtRef.current ? Date.now() - hiddenAtRef.current : 0;
+      hiddenAtRef.current = null;
+      if (forceReconnect || hiddenFor >= 30_000 || !clientRef.current.isConnected) {
+        try { await reconnect(); } catch { /* status and error are updated by reconnect */ }
+        return;
+      }
+      if (Date.now() - lastHealthCheckAtRef.current < 10_000) return;
+      try {
+        await healthCheck();
+        if (!disposed) {
+          setStatus('connected');
+          setError(null);
+          await refreshTickers();
+        }
+      } catch {
+        try { await reconnect(); } catch { /* status and error are updated by reconnect */ }
+      }
+    };
+
+    const schedule = () => {
+      timer = setTimeout(async () => {
+        if (document.visibilityState === 'visible') await checkOrReconnect();
+        if (!disposed) schedule();
+      }, 30_000);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') hiddenAtRef.current = Date.now();
+      else void checkOrReconnect();
+    };
+    const onPageShow = () => { void checkOrReconnect(); };
+    const onOnline = () => { void checkOrReconnect(true); };
+    const onOffline = () => {
+      setStatus('offline');
+      setError('设备当前处于离线状态');
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pageshow', onPageShow);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    schedule();
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, [healthCheck, reconnect, refreshTickers]);
   const addCustomNode = useCallback(async (url: string) => { const normalized = url.trim(); if (!/^wss?:\/\//i.test(normalized)) throw new Error('节点必须是 ws:// 或 wss:// 地址'); await switchNode(normalized); const next = [...new Set([...customNodes, normalized])]; setCustomNodes(next); await storageRef.current.set('custom_ws_nodes.v1', next); }, [customNodes, switchNode]);
   const removeCustomNode = useCallback(async (url: string) => { const next = customNodes.filter(item => item !== url); setCustomNodes(next); await storageRef.current.set('custom_ws_nodes.v1', next); }, [customNodes]);
   const addCustomPair = useCallback(async (pair: MarketPair) => { const normalized = { base: pair.base.trim().toUpperCase(), quote: pair.quote.trim().toUpperCase() }; if (!normalized.base || !normalized.quote || normalized.base === normalized.quote) throw new Error('请输入不同的基础资产和计价资产'); const assets = await clientRef.current.lookupAssets([normalized.base, normalized.quote]); if (!assets[0] || !assets[1]) throw new Error('交易对资产不存在'); const nextPairs = [...pairsRef.current.filter(item => item.base !== normalized.base || item.quote !== normalized.quote), normalized]; pairsRef.current = nextPairs; setPairs(nextPairs); const saved = nextPairs.filter(item => !defaultPairs.some(base => base.base === item.base && base.quote === item.quote)); await storageRef.current.set('custom_pairs.v1', saved); await refreshTickers(); }, [refreshTickers]);
@@ -321,13 +421,14 @@ export function ChainProvider({ children }: { children: React.ReactNode }) {
     broadcastTransaction,
     authenticateAccount,
     switchNode,
+    reconnect,
     customNodes,
     addCustomNode,
     removeCustomNode,
     addCustomPair,
     removeCustomPair,
     customPairs: pairs.filter(item => !defaultPairs.some(base => base.base === item.base && base.quote === item.quote)),
-  }), [addCustomNode, addCustomPair, authenticateAccount, broadcastTransaction, connectedUrl, customNodes, error, favoriteKeys, loadAccountAssets, loadAccountHistory, loadAccountOrders, loadCancelOrderPreview, loadKlines, loadRecentTrades, loadLendingOverview, loadLendingPreview, loadLiquidityPoolHistory, loadLiquidityPools, loadLiquidityPreview, loadLimitOrderPreview, loadOrderBook, loadTransferPreview, pairs, prefetchAccountData, refreshTickers, removeCustomNode, removeCustomPair, setValuationAsset, signGenericOperation, signPreview, status, switchNode, tickers, toggleFavorite, valuationAsset]);
+  }), [addCustomNode, addCustomPair, authenticateAccount, broadcastTransaction, connectedUrl, customNodes, error, favoriteKeys, loadAccountAssets, loadAccountHistory, loadAccountOrders, loadCancelOrderPreview, loadKlines, loadRecentTrades, loadLendingOverview, loadLendingPreview, loadLiquidityPoolHistory, loadLiquidityPools, loadLiquidityPreview, loadLimitOrderPreview, loadOrderBook, loadTransferPreview, pairs, prefetchAccountData, reconnect, refreshTickers, removeCustomNode, removeCustomPair, setValuationAsset, signGenericOperation, signPreview, status, switchNode, tickers, toggleFavorite, valuationAsset]);
 
   return <ChainContext.Provider value={value}>{children}</ChainContext.Provider>;
 }

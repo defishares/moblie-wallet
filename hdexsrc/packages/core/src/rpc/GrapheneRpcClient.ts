@@ -48,6 +48,8 @@ export interface GrapheneRpcClientOptions {
   WebSocketImpl?: typeof WebSocket;
 }
 
+export type ConnectionLostListener = (error: Error) => void;
+
 const apiIdDefaults: Record<ApiName, number | null> = {
   database: null,
   history: null,
@@ -64,6 +66,7 @@ export class GrapheneRpcClient {
   private readonly WebSocketImpl: typeof WebSocket;
   private connectedUrl: string | null = null;
   private closedByClient = false;
+  private readonly connectionLostListeners = new Set<ConnectionLostListener>();
 
   constructor(options: GrapheneRpcClientOptions = {}) {
     this.requestTimeoutMs = options.requestTimeoutMs ?? 12_000;
@@ -76,6 +79,11 @@ export class GrapheneRpcClient {
 
   get isConnected(): boolean {
     return this.socket?.readyState === this.WebSocketImpl.OPEN;
+  }
+
+  onConnectionLost(listener: ConnectionLostListener): () => void {
+    this.connectionLostListeners.add(listener);
+    return () => this.connectionLostListeners.delete(listener);
   }
 
   async connect(url: string, expectedChainId?: string): Promise<ConnectResult> {
@@ -815,7 +823,11 @@ export class GrapheneRpcClient {
     this.socket = null;
     this.connectedUrl = null;
     this.apiIds = { ...apiIdDefaults };
-    this.rejectAll(new Error(this.closedByClient ? '连接已关闭' : '节点连接已断开'));
+    const error = new Error(this.closedByClient ? '连接已关闭' : '节点连接已断开');
+    this.rejectAll(error);
+    if (!this.closedByClient) {
+      this.connectionLostListeners.forEach(listener => listener(error));
+    }
   }
 
   private rejectAll(error: Error): void {
