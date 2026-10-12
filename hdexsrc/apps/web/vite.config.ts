@@ -5,10 +5,20 @@ import { readFileSync } from 'node:fs';
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const rnAppIcon = readFileSync(new URL('../../src/assets/defishares-icon.png', import.meta.url));
+  const productionCsp = [
+    "default-src 'self'",
+    "connect-src 'self' wss: https://gate.defishares.org https://api.defishares.org https://cloudflareinsights.com https://static.cloudflareinsights.com",
+    'frame-src https://defishares.org https://*.defishares.org',
+    "script-src 'self' https://static.cloudflareinsights.com",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join('; ');
   return {
   plugins: [react(), {
     name: 'defishares-production-csp',
-    transformIndexHtml: { order: 'post', handler: (html, context) => context.server ? html : html.replace('</head>', `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' wss: https://gate.defishares.org; frame-src https://defishares.org https://*.defishares.org; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'self'; form-action 'self'" /></head>`) },
+    transformIndexHtml: { order: 'post', handler: (html, context) => context.server ? html : html.replace('</head>', `<meta http-equiv="Content-Security-Policy" content="${productionCsp}" /></head>`) },
   }],
   resolve: {
     // bitsharesjs depends on Node's stream implementation for create-hash.
