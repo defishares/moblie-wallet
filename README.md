@@ -38,7 +38,7 @@ DefiShares 移动端钱包与交易客户端，基于 React Native 和 TypeScrip
 
 ```bash
 git clone https://github.com/defishares/mobile-app.git
-cd mobile-app/hdexsrc
+cd mobile-app
 pnpm install --frozen-lockfile
 ```
 
@@ -67,7 +67,7 @@ pnpm android
 
 ### 运行 iOS
 
-在 `hdexsrc/` 目录下执行：
+在仓库根目录执行：
 
 ```bash
 bundle install
@@ -83,17 +83,17 @@ pnpm ios
 
 | 配置入口 | 内容 |
 | --- | --- |
-| `hdexsrc/src/config/constants.ts` | 链 ID、WebSocket 节点、核心资产、渠道与链上配置账户 |
-| `hdexsrc/src/services/gateway_api.ts` | 网关 API、充提币种及链上网关账户 |
-| `hdexsrc/src/screens/RegisterScreen.tsx` | 账户注册 Faucet 地址 |
-| `hdexsrc/src/config/announcementAdmins.ts` | 公告管理配置 |
-| `hdexsrc/android/app/build.gradle` | Android 渠道、应用 ID 和签名配置 |
+| `src/config/constants.ts` | 链 ID、WebSocket 节点、核心资产、渠道与链上配置账户 |
+| `src/services/gateway_api.ts` | 网关 API、充提币种及链上网关账户 |
+| `src/screens/RegisterScreen.tsx` | 账户注册 Faucet 地址 |
+| `src/config/announcementAdmins.ts` | 公告管理配置 |
+| `android/app/build.gradle` | Android 渠道、应用 ID 和签名配置 |
 
 **测试渠道当前与主网使用相同的节点和链 ID。** 进行隔离测试前，需先配置独立的测试链与配套服务。
 
 ## 构建与检查
 
-以下命令均在 `hdexsrc/` 目录执行。
+以下命令均在仓库根目录执行。
 
 ```bash
 pnpm lint
@@ -117,7 +117,7 @@ HDEX_RELEASE_KEY_PASSWORD=your-key-password
 pnpm android:main:dist
 ```
 
-输出目录：`hdexsrc/android/app/build/outputs/apk/defiShares/release/`。
+输出目录：`android/app/build/outputs/apk/defiShares/release/`。
 
 当前 `android/app/build.gradle` 的 `hermesCommand` 指向 Windows 可执行文件。在 macOS、Linux 或不同依赖布局下构建发布包前，需移除此硬编码配置以采用 React Native 默认工具链，或将其调整为本机构建工具路径。
 
@@ -126,23 +126,22 @@ pnpm android:main:dist
 ```text
 mobile-app/
 ├── README.md
-└── hdexsrc/
-    ├── App.tsx                 # 应用入口
-    ├── android/                # Android 原生工程与构建配置
-    ├── ios/                    # iOS 原生工程
-    ├── patches/                # 原生依赖补丁
-    ├── src/
-    │   ├── assets/             # 图片与 K 线资源
-    │   ├── components/         # 通用组件
-    │   ├── config/             # 网络、渠道与常量
-    │   ├── hooks/              # 业务 Hooks
-    │   ├── navigation/         # 页面导航
-    │   ├── screens/            # 业务页面
-    │   ├── services/           # 链交互、网关与安全存储
-    │   ├── store/              # 状态管理
-    │   ├── types/              # 类型定义
-    │   └── utils/              # 工具函数
-    └── tests/                  # 存储、流动性池和解锁会话测试
+├── App.tsx                     # 应用入口
+├── android/                    # Android 原生工程与构建配置
+├── ios/                        # iOS 原生工程
+├── patches/                    # 原生依赖补丁
+├── src/
+│   ├── assets/                 # 图片与 K 线资源
+│   ├── components/             # 通用组件
+│   ├── config/                 # 网络、渠道与常量
+│   ├── hooks/                  # 业务 Hooks
+│   ├── navigation/             # 页面导航
+│   ├── screens/                # 业务页面
+│   ├── services/               # 链交互、网关与安全存储
+│   ├── store/                  # 状态管理
+│   ├── types/                  # 类型定义
+│   └── utils/                  # 工具函数
+└── tests/                      # 存储、流动性池和解锁会话测试
 ```
 
 ## 贡献
