@@ -2,12 +2,12 @@
 
 DefiShares 钱包客户端，包含 React Native 原生应用和面向移动浏览器的 React 应用。两个客户端在同一主分支维护，通过 pnpm Workspace 共享网络配置、链交互和业务计算模块。
 
-[官方网站](https://defishares.org) · [问题反馈](https://github.com/defishares/wallet/issues)
+[官方网站](https://defishares.org) · [问题反馈](https://github.com/defishares/moblie-wallet/issues)
 
 ## 项目结构
 
 ```text
-wallet/
+moblie-wallet/
 ├── apps/
 │   ├── mobile/          # React Native：Android / iOS
 │   └── mobile-web/      # React + Vite：移动浏览器
@@ -32,8 +32,8 @@ wallet/
 需要 Node.js **20.19.4 或更新版本**及 pnpm；仓库通过 `packageManager` 固定使用 pnpm **11.25.0**。
 
 ```bash
-git clone https://github.com/defishares/wallet.git
-cd wallet
+git clone https://github.com/defishares/moblie-wallet.git
+cd moblie-wallet
 pnpm install --frozen-lockfile
 ```
 

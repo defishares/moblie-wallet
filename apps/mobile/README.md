@@ -2,7 +2,7 @@
 
 DefiShares 移动端钱包与交易客户端，基于 React Native 和 TypeScript 构建，提供账户管理、资产转账、行情交易及借贷等功能，包含 Android 与 iOS 原生工程。
 
-[官方网站](https://defishares.org) · [问题反馈](https://github.com/defishares/wallet/issues)
+[官方网站](https://defishares.org) · [问题反馈](https://github.com/defishares/moblie-wallet/issues)
 
 ## 主要功能
 
@@ -37,8 +37,8 @@ DefiShares 移动端钱包与交易客户端，基于 React Native 和 TypeScrip
 ### 安装依赖
 
 ```bash
-git clone https://github.com/defishares/wallet.git
-cd wallet
+git clone https://github.com/defishares/moblie-wallet.git
+cd moblie-wallet
 pnpm install --frozen-lockfile
 cd apps/mobile
 ```
